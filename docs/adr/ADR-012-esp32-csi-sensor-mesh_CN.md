@@ -199,3 +199,149 @@ pub struct FusedFrame {
     fused_breathing_band: f64,
 }
 ```
+
+### 时钟漂移处理
+
+ESP32晶体振荡器漂移约20-50 ppm。1小时内，两个节点可能会偏离72-180ms。这使得跨节点的原始相位对齐变得不可能。
+
+**解决方案**：特征级融合，而非信号级融合。
+
+```
+信号级（对ESP32错误）：
+  跨节点对齐原始I/Q样本 → 需要<1µs同步 → 不切实际
+
+特征级（对ESP32正确）：
+  每个节点：原始CSI → 幅度 + 相位 + 频谱特征（本地）
+  聚合器：收集特征 → 关联 → 融合决策
+  无需跨节点相位对齐
+```
+
+具体来说：
+- **运动能量**：取跨节点最大值（任何节点检测到运动 = 运动）
+- **呼吸频带**：使用SNR最高的节点作为主要节点，其他节点作为佐证
+- **位置**：跨节点幅度比率估计位置（无需相位）
+
+### 不同部署的感知能力
+
+| 能力 | 1个节点 | 3个节点 | 6个节点 | 证据 |
+|-----------|--------|---------|---------|----------|
+| 存在检测 | 良好 | 优秀 | 优秀 | 单节点RSSI方差 |
+| 粗略运动 | 良好 | 优秀 | 优秀 | 多普勒能量 |
+| 房间级位置 | 无 | 良好 | 优秀 | 幅度比率 |
+| 呼吸 | 边缘 | 良好 | 良好 | 0.1-0.5 Hz频带，位置敏感 |
+| 心跳 | 差 | 差-边缘 | 边缘 | 需要理想位置，低噪声 |
+| 多人计数 | 无 | 边缘 | 良好 | 空间多样性 |
+| 姿态估计 | 无 | 差 | 边缘 | 需要模型 + 足够的多样性 |
+
+**诚实评估**：ESP32 CSI的保真度低于Intel 5300或Atheros。心跳检测对位置敏感且不可靠。呼吸检测在良好放置时有效。运动和存在检测是可靠的。
+
+### 故障模式和缓解措施
+
+| 故障模式 | 严重程度 | 缓解措施 |
+|-------------|----------|------------|
+| 多径在杂乱房间中占主导 | 高 | 网格多样性：3+个节点从不同角度 |
+| 人遮挡节点和路由器之间的路径 | 中 | 网格：其他节点仍有清晰路径 |
+| 时钟漂移破坏跨节点融合 | 中 | 仅特征级融合；无跨节点相位对齐 |
+| 高流量期间UDP包丢失 | 低 | 序列号，<100ms间隙的插值 |
+| ESP32 WiFi驱动与CSI的bug | 中 | 固定ESP-IDF版本，在已知良好的板上测试 |
+| 节点电源故障 | 低 | 聚合器优雅处理丢失的节点 |
+
+### 材料清单（入门套件）
+
+| 物品 | 数量 | 单价 | 总计 |
+|------|----------|-----------|-------|
+| ESP32-S3-DevKitC-1 | 3 | $10 | $30 |
+| USB-A转USB-C线缆 | 3 | $3 | $9 |
+| USB电源适配器（多端口） | 1 | $15 | $15 |
+| 消费级WiFi路由器（任何） | 1 | $0（现有） | $0 |
+| 聚合器（笔记本电脑或Pi 4） | 1 | $0（现有） | $0 |
+| **总计** | | | **$54** |
+
+### 最小构建规格（克隆-刷写-运行）
+
+**选项A：使用预构建二进制文件（无需工具链）**
+
+```bash
+# 从GitHub Release v0.1.0-esp32下载二进制文件
+# 用esptool刷写（pip install esptool）
+python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
+  write-flash --flash-mode dio --flash-size 4MB \
+  0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 esp32-csi-node.bin
+
+# 配置WiFi凭据（无需重新编译）
+python scripts/provision.py --port COM7 \
+  --ssid "YourWiFi" --password "secret" --target-ip 192.168.1.20
+
+# 运行聚合器
+cargo run -p wifi-densepose-hardware --bin aggregator -- --bind 0.0.0.0:5005 --verbose
+```
+
+**选项B：使用Docker从源代码构建（无需安装ESP-IDF）**
+
+```bash
+# 步骤1：编辑WiFi凭据
+vim firmware/esp32-csi-node/sdkconfig.defaults
+
+# 步骤2：用Docker构建
+cd firmware/esp32-csi-node
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/project" -w /project \
+  espressif/idf:v5.2 bash -c "idf.py set-target esp32s3 && idf.py build"
+
+# 步骤3：刷写
+cd build
+python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
+  write-flash --flash-mode dio --flash-size 4MB \
+  0x0 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin \
+  0x10000 esp32-csi-node.bin
+
+# 步骤4：运行聚合器
+cargo run -p wifi-densepose-hardware --bin aggregator -- --bind 0.0.0.0:5005 --verbose
+```
+
+**已验证**：20 Hz CSI流，64/128/192子载波帧，RSSI -47至-88 dBm。
+参见教程：https://github.com/ruvnet/wifi-densepose/issues/34
+
+### ESP32的现实证明
+
+**现场验证**使用ESP32-S3-DevKitC-1（CP2102，MAC 3C:0F:02:EC:C2:28）：
+- 18秒内693帧（约21.6 fps）
+- 序列号连续（零帧丢失）
+- 存在检测确认：每秒钟幅度方差的运动评分10/10
+- 帧类型：64 sc（148 B），128 sc（276 B），192 sc（404 B）
+- 20个Rust测试 + 6个Python测试通过
+
+预构建二进制文件：https://github.com/ruvnet/wifi-densepose/releases/tag/v0.1.0-esp32
+
+## 影响
+
+### 积极
+- **$54入门套件**：获取真实CSI数据的最低可能障碍
+- **大量可用硬件**：ESP32板在全球有库存
+- **真实数据路径**：用实际硬件输入消除所有`np.random.rand()`占位符
+- **证明工件**：捕获的CSI + 预期哈希证明管道处理真实数据
+- **可扩展网格**：添加节点以获得更多覆盖范围，无需更改软件
+- **特征级融合**：避免跨节点相位同步的不可能问题
+
+### 消极
+- **比研究NIC保真度低**：ESP32 CSI比Intel 5300噪声更大
+- **心跳检测不可靠**：微多普勒分辨率不足以进行一致的心跳检测
+- **ESP-IDF学习曲线**：固件开发需要嵌入式C知识
+- **WiFi干扰**：与数据流量共享同一信道的节点会增加噪声
+- **位置敏感性**：呼吸检测需要仔细的节点定位
+
+### 与其他ADR的交互
+- **ADR-011**（现实证明）：ESP32为证明包提供真实CSI捕获
+- **ADR-008**（分布式共识）：网格节点可以使用简化的Raft进行配置分发
+- **ADR-003**（RVF容器）：聚合器以RVF格式存储CSI特征
+- **ADR-004**（HNSW）：来自ESP32网格的环境指纹输入HNSW索引
+
+## 参考资料
+
+- [Espressif ESP-CSI仓库](https://github.com/espressif/esp-csi)
+- [ESP-IDF WiFi CSI API](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi.html#wi-fi-channel-state-information)
+- [ESP32 CSI研究论文](https://ieeexplore.ieee.org/document/9439871)
+- [使用ESP32进行WiFi感知：教程](https://arxiv.org/abs/2207.07859)
+- ADR-011：Python现实证明和模拟消除
+- ADR-018：ESP32开发实现（二进制帧格式规范）
+- [预构建固件版本v0.1.0-esp32](https://github.com/ruvnet/wifi-densepose/releases/tag/v0.1.0-esp32)
+- [逐步教程（Issue #34）](https://github.com/ruvnet/wifi-densepose/issues/34)
