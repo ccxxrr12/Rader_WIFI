@@ -139,7 +139,7 @@ docker pull ruvnet/wifi-densepose:latest
 
 ```bash
 git clone https://github.com/ruvnet/RuView.git
-cd RuView/rust-port/wifi-densepose-rs
+cd Rader_WIFI/rust-port/wifi-densepose-rs
 
 # 构建
 cargo build --release
