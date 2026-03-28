@@ -899,9 +899,10 @@ fn extract_features_from_frame(
 
 /// Simple threshold classification (no smoothing) — used as the "raw" input.
 fn raw_classify(score: f64) -> String {
-    if score > 0.25 { "active".into() }
-    else if score > 0.12 { "present_moving".into() }
-    else if score > 0.04 { "present_still".into() }
+    // Lowered thresholds for Windows WiFi mode (RSSI-based, less sensitive than CSI)
+    if score > 0.15 { "active".into() }
+    else if score > 0.08 { "present_moving".into() }
+    else if score > 0.03 { "present_still".into() }
     else { "absent".into() }
 }
 
