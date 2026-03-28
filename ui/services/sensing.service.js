@@ -119,9 +119,6 @@ class SensingService {
       this._reconnectAttempt = 0;
       this._stopSimulation();
       this._setState('connected');
-      // Don't assume "live" yet — wait for first frame's source field.
-      // Fetch server status to determine actual data source immediately.
-      this._detectServerSource();
     };
 
     this._ws.onmessage = (evt) => {
@@ -290,12 +287,11 @@ class SensingService {
    */
   _applyServerSource(rawSource) {
     this._serverSource = rawSource;
-    if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
+    if (rawSource && (rawSource === 'live' || rawSource.startsWith('esp32') || rawSource.startsWith('wifi'))) {
       this._setDataSource('live');
     } else if (rawSource === 'simulated' || rawSource === 'simulate') {
       this._setDataSource('server-simulated');
     } else {
-      // Unknown source — show as server-simulated to be safe
       this._setDataSource('server-simulated');
     }
   }
