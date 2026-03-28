@@ -91,8 +91,16 @@ export class DashboardTab {
     const ds = sensingService.dataSource;
     const statusText = el.querySelector('.status-text');
     const statusMsg  = el.querySelector('.status-message');
+    
+    // Get the raw server source to display specific hardware type
+    const serverSource = sensingService.serverSource;
+    const isWifi = serverSource && (serverSource === 'wifi' || serverSource.startsWith('wifi:'));
+    const isEsp32 = serverSource && (serverSource === 'esp32' || serverSource.startsWith('esp32:'));
+    
     const config = {
-      'live':              { text: 'ESP32',     status: 'healthy', msg: 'Real hardware connected' },
+      'live':              { text: isWifi ? 'WiFi' : (isEsp32 ? 'ESP32' : 'LIVE'), 
+                            status: 'healthy', 
+                            msg: isWifi ? 'WiFi hardware connected' : (isEsp32 ? 'Real hardware connected' : 'Hardware connected') },
       'server-simulated':  { text: 'SIMULATED', status: 'warning', msg: 'Server running without hardware' },
       'reconnecting':      { text: 'RECONNECTING', status: 'degraded', msg: 'Attempting to connect...' },
       'simulated':         { text: 'OFFLINE',   status: 'unhealthy', msg: 'Server unreachable, local fallback' },

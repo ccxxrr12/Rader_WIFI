@@ -215,8 +215,13 @@ export class SensingTab {
     if (banner) {
       // Map the service's dataSource to banner text and CSS modifier class.
       const dataSource = sensingService.dataSource;
+      const serverSource = sensingService.serverSource;
+      const isWifi = serverSource && (serverSource === 'wifi' || serverSource.startsWith('wifi:'));
+      const isEsp32 = serverSource && (serverSource === 'esp32' || serverSource.startsWith('esp32:'));
+      
       const bannerConfig = {
-        'live':              { text: 'LIVE \u2014 ESP32 HARDWARE',           cls: 'sensing-source-live' },
+        'live':              { text: isWifi ? 'LIVE \u2014 WiFi HARDWARE' : (isEsp32 ? 'LIVE \u2014 ESP32 HARDWARE' : 'LIVE \u2014 HARDWARE'), 
+                              cls: 'sensing-source-live' },
         'server-simulated':  { text: 'SIMULATED \u2014 NO HARDWARE',        cls: 'sensing-source-server-sim' },
         'reconnecting':      { text: 'RECONNECTING...',                    cls: 'sensing-source-reconnecting' },
         'simulated':         { text: 'OFFLINE \u2014 CLIENT SIMULATION',    cls: 'sensing-source-simulated' },
