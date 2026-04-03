@@ -1,4 +1,4 @@
-# NAME of the project
+# 基于CSI与边缘LLM驱动的轻量化个人空间安全感知系统
 
 ## Description
 
