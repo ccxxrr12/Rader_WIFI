@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>π RuView — 伤员分诊仪表盘</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#e0e0e0;overflow:hidden;height:100vh}
+.header{background:linear-gradient(135deg,#1a1f2e,#0d1117);padding:10px 20px;border-bottom:2px solid #2a3040;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:1.3em;color:#4fc3f7}
+.header .status{font-size:.8em;color:#78909c}
+.header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.header .dot.online{background:#4caf50;box-shadow:0 0 6px #4caf50}
+.header .dot.offline{background:#f44336}
+.main{display:grid;grid-template-columns:1fr 300px;height:calc(100vh - 56px)}
+.map-area{position:relative;background:#111827}
+.sidebar{background:#161b25;border-left:1px solid #2a3040;overflow-y:auto;padding:12px}
+.stats{display:flex;gap:8px;margin-bottom:12px}
+.stat-card{flex:1;text-align:center;padding:8px 4px;border-radius:6px;background:#1a1f2e}
+.stat-card .count{font-size:1.5em;font-weight:bold}
+.stat-card .label{font-size:.7em;color:#78909c}
+.stat-card.red{border-left:3px solid #f44336}.stat-card.red .count{color:#f44336}
+.stat-card.yellow{border-left:3px solid #ff9800}.stat-card.yellow .count{color:#ff9800}
+.stat-card.green{border-left:3px solid #4caf50}.stat-card.green .count{color:#4caf50}
+.stat-card.black{border-left:3px solid #607d8b}.stat-card.black .count{color:#607d8b}
+.stat-card.total{border-left:3px solid #4fc3f7}.stat-card.total .count{color:#4fc3f7}
+.survivor-card{background:#1a1f2e;border-radius:8px;padding:10px;margin-bottom:8px;border-left:4px solid #4fc3f7;transition:.2s}
+.survivor-card:hover{background:#222940}
+.survivor-card.red{border-left-color:#f44336}
+.survivor-card.yellow{border-left-color:#ff9800}
+.survivor-card.green{border-left-color:#4caf50}
+.survivor-card.black{border-left-color:#607d8b}
+.survivor-card .id{font-size:.8em;color:#78909c}
+.survivor-card .vital{display:flex;gap:12px;margin:4px 0;font-size:.85em}
+.survivor-card .vital span{color:#b0bec5}
+.survivor-card .vital span strong{color:#e0e0e0}
+.triage-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.75em;font-weight:bold;margin-top:4px}
+.triage-badge.red{background:#f4433633;color:#f44336}
+.triage-badge.yellow{background:#ff980033;color:#ff9800}
+.triage-badge.green{background:#4caf5033;color:#4caf50}
+.triage-badge.black{background:#607d8b33;color:#607d8b}
+.deteriorating{color:#ff9800;font-size:.7em;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.alerts h3{font-size:.9em;color:#78909c;margin:12px 0 8px}
+.alert-item{font-size:.75em;padding:6px;border-radius:4px;margin-bottom:4px;background:#1a1f2e}
+.alert-item.prio1{border-left:3px solid #f44336}
+.alert-item.prio2{border-left:3px solid #ff9800}
+.alert-item .time{color:#78909c}
+.map-legend{position:absolute;bottom:15px;left:15px;background:#1a1f2ecc;padding:8px;border-radius:6px;font-size:.7em}
+.map-legend div{margin:3px 0;display:flex;align-items:center;gap:6px}
+.map-legend .dot{width:10px;height:10px;border-radius:50%}
+.skeleton-panel{background:#1a1f2e;border-radius:8px;padding:8px;margin-bottom:8px;font-size:.8em}
+.skeleton-panel button{background:#424242;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:.8em}
+.skeleton-panel button.on{background:#2196f3}
+.skeleton-panel button:hover{opacity:.85}
+#assessment{font-size:.75em;color:#78909c;margin-bottom:8px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>π RuView — 伤员分诊仪表盘</h1>
+  <div class="status"><span class="dot online" id="sd"></span><span id="st">等待连接...</span></div>
+</div>
+
+<div class="main">
+  <div class="map-area">
+    <canvas id="map" width="800" height="520"></canvas>
+    <div class="map-legend">
+      <div><span class="dot" style="background:#f44336"></span> Immediate (红)</div>
+      <div><span class="dot" style="background:#ff9800"></span> Delayed (黄)</div>
+      <div><span class="dot" style="background:#4caf50"></span> Minor (绿)</div>
+      <div><span class="dot" style="background:#607d8b"></span> Deceased (黑)</div>
+      <div><span class="dot" style="background:#4fc3f7;border-radius:0"></span> C5节点</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="stats">
+      <div class="stat-card total"><div class="count" id="stt">0</div><div class="label">总计</div></div>
+      <div class="stat-card red"><div class="count" id="st1">0</div><div class="label">紧急</div></div>
+      <div class="stat-card yellow"><div class="count" id="st2">0</div><div class="label">延迟</div></div>
+      <div class="stat-card green"><div class="count" id="st3">0</div><div class="label">轻伤</div></div>
+      <div class="stat-card black"><div class="count" id="st4">0</div><div class="label">死亡</div></div>
+    </div>
+    <div id="assessment"></div>
+    <div class="skeleton-panel">
+      <span style="color:#78909c">3D 骨架:</span>
+      <button id="sk-btn" onclick="toggleSkel()">关闭</button>
+      <span style="font-size:.7em;color:#666;margin-left:4px">(可选·ONNX)</span>
+    </div>
+    <div id="slist"><p style="color:#666;font-size:.8em">等待 CSI 数据...</p></div>
+    <div class="alerts"><h3>⚠ 告警</h3><div id="alist"><p style="color:#666;font-size:.75em">暂无</p></div></div>
+  </div>
+</div>
+
+<script>
+// ── START 分诊规则 (标准 START 协议) ──
+function calcTriage(br, hr, motion, sq) {
+  if (sq < 0.05) return {level:'Unknown',color:'gray',priority:5};
+  const noBr = (br === null || br === undefined || br <= 0);
+  const noHr = (hr === null || hr === undefined || hr <= 0);
+  if (noBr && noHr) return {level:'Deceased',color:'black',priority:4};
+  if (br > 30 || (br > 0 && br < 10)) return {level:'Immediate',color:'red',priority:1};
+  if (hr > 120 || (hr > 0 && hr < 40)) return {level:'Immediate',color:'red',priority:1};
+  if (br >= 12 && br <= 20 && hr >= 60 && hr <= 100) return {level:'Minor',color:'green',priority:3};
+  if (br >= 12 && br <= 24 && hr >= 50 && hr <= 100 && motion > 0.3) return {level:'Minor',color:'green',priority:3};
+  return {level:'Delayed',color:'yellow',priority:2};
+}
+
+// ── 全局状态 ──
+const NODES = [{id:1,x:400,y:150,l:'C5 #1'},{id:2,x:150,y:400,l:'C5 #2'},{id:3,x:650,y:400,l:'C5 #3'}];
+const W=800,H=520,M=40;
+let survivors = {};
+let alerts = [];
+let survivorSeq = 0;
+let skelOn = false;
+let lastVitals = null;
+
+// ── Canvas ──
+const cv = document.getElementById('map');
+const cx = cv.getContext('2d');
+
+function draw() {
+  cx.clearRect(0,0,W,H);
+  cx.strokeStyle='#1a2332'; cx.lineWidth=1;
+  for(let x=0;x<W;x+=40){cx.beginPath();cx.moveTo(x,0);cx.lineTo(x,H);cx.stroke()}
+  for(let y=0;y<H;y+=40){cx.beginPath();cx.moveTo(0,y);cx.lineTo(W,y);cx.stroke()}
+  cx.strokeStyle='#2a3040'; cx.lineWidth=2;
+  cx.strokeRect(M,M,W-2*M,H-2*M);
+  cx.fillStyle='#555'; cx.font='11px monospace';
+  cx.fillText('4m',W/2-10,M-5); cx.fillText('3m',M-35,H/2+4);
+  // 节点
+  NODES.forEach(n=>{
+    cx.beginPath();cx.arc(n.x,n.y,120,0,Math.PI*2);
+    cx.strokeStyle='#1a4a6e';cx.setLineDash([4,4]);cx.stroke();cx.setLineDash([]);
+    cx.beginPath();cx.arc(n.x,n.y,8,0,Math.PI*2);
+    cx.fillStyle='#4fc3f7';cx.fill();cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();
+    cx.fillStyle='#4fc3f7';cx.font='11px sans-serif';cx.fillText(n.l,n.x-18,n.y-14);
+  });
+  // 伤员
+  Object.values(survivors).forEach(s=>{
+    const px = M + (s.x+2)/4*(W-2*M); const py = M + (s.y+1.5)/3*(H-2*M);
+    const cx2=Math.max(M,Math.min(W-M,px)), cy2=Math.max(M,Math.min(H-M,py));
+    if(s.triage==='Immediate'||s.deteriorating){
+      cx.beginPath();cx.arc(cx2,cy2,25,0,Math.PI*2);cx.fillStyle=s.color+'22';cx.fill();
+    }
+    cx.beginPath();cx.arc(cx2,cy2,12,0,Math.PI*2);
+    cx.fillStyle=s.color;cx.fill();cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();
+    cx.fillStyle='#fff';cx.font='bold 10px monospace';cx.textAlign='center';
+    cx.fillText(s.id.substring(0,8),cx2,cy2-18);
+    if(s.br!==null){cx.font='9px sans-serif';cx.fillStyle='#4fc3f7';cx.fillText(s.br.toFixed(0)+'/min',cx2,cy2+22)}
+  });
+}
+
+// ── 伤员匹配 (基于 NodeID 的简易聚类) ──
+function matchSurvivor(nodeId, now) {
+  // 清理超时
+  Object.keys(survivors).forEach(id=>{if(now-survivors[id].lastSeen>30)delete survivors[id]});
+  // 匹配 (同一节点 5秒内)
+  for(const[id,s]of Object.entries(survivors)){if(s.nodeId===nodeId&&now-s.lastSeen<5)return id}
+  // 新建
+  survivorSeq++;
+  const nid = 'SURV-'+survivorSeq.toString(16).padStart(4,'0');
+  survivors[nid] = {id:nid,nodeId,br:null,hr:null,motion:0,x:0,y:0,triage:'Unknown',color:'gray',
+    priority:5,firstSeen:now,lastSeen:now,deteriorating:false,status:'active',brHist:[],hrHist:[]};
+  return nid;
+}
+
+// ── 处理 SensingUpdate ──
+function handleUpdate(data) {
+  const now = Date.now()/1000;
+  lastVitals = data;
+  if(!data.nodes||!data.nodes.length) return;
+
+  data.nodes.forEach(node => {
+    const sid = matchSurvivor(node.node_id, now);
+    const s = survivors[sid];
+    s.lastSeen = now;
+    s.nodeId = node.node_id;
+
+    // 生命体征 (来自服务器 VitalSigns)
+    if(data.vital_signs){
+      s.br = data.vital_signs.breathing_rate_bpm;
+      s.hr = data.vital_signs.heart_rate_bpm;
+    }
+    s.motion = data.classification?.motion_level==='high'?0.8:data.classification?.motion_level==='medium'?0.4:0.1;
+
+    // 平滑
+    if(s.br!==null&&s.br!==undefined){s.brHist.push(s.br);if(s.brHist.length>20)s.brHist.shift()}
+    if(s.hr!==null&&s.hr!==undefined){s.hrHist.push(s.hr);if(s.hrHist.length>20)s.hrHist.shift()}
+    const smBr = s.brHist.length?avg(s.brHist.slice(-5)):null;
+    const smHr = s.hrHist.length?avg(s.hrHist.slice(-5)):null;
+    const sq = data.vital_signs?.signal_quality||(data.features?.mean_rssi?Math.min(1,Math.max(0,(data.features.mean_rssi+90)/60)):0.5);
+
+    // 分诊
+    const prev = s.triage;
+    s.triage = calcTriage(smBr, smHr, s.motion, sq).level;
+    s.color = calcTriage(smBr, smHr, s.motion, sq).color;
+    s.priority = calcTriage(smBr, smHr, s.motion, sq).priority;
+
+    // 位置 (基于节点位置 + RSSI)
+    const nn = NODES.find(n=>n.id===node.node_id);
+    if(nn){
+      const d = rssiDist(node.rssi_dbm);
+      s.x = (nn.x-M)/W*4-2 + d*0.5; s.y = (nn.y-M)/H*3-1.5 + d*0.3;
+    }
+
+    // 恶化检测
+    if(prev!=='Unknown'&&s.triage!=='Unknown'&&calcTriage(smBr,smHr,s.motion,sq).priority<calcTriage(smBr||0,smHr||0,0,sq).priority){
+      s.deteriorating=true;
+      alerts.unshift({time:new Date().toLocaleTimeString(),id:sid.substring(0,8),
+        msg:`分诊恶化: ${prev} → ${s.triage}`,priority:s.priority});
+    }else{s.deteriorating=false}
+  });
+
+  // 多人检测
+  if(data.persons){
+    data.persons.forEach(p=>{
+      const sid = matchSurvivor(data.nodes[0]?.node_id||1, now);
+      const s = survivors[sid];
+      if(p.keypoints){s.x=p.keypoints[0]?.x||s.x;s.y=p.keypoints[0]?.y||s.y}
+    });
+  }
+
+  render();
+}
+
+function render(){
+  //统计
+  const counts={total:0,Immediate:0,Delayed:0,Minor:0,Deceased:0,Unknown:0};
+  Object.values(survivors).forEach(s=>{counts.total++;counts[s.triage]=(counts[s.triage]||0)+1});
+  document.getElementById('stt').textContent=counts.total;
+  document.getElementById('st1').textContent=counts.Immediate||0;
+  document.getElementById('st2').textContent=counts.Delayed||0;
+  document.getElementById('st3').textContent=counts.Minor||0;
+  document.getElementById('st4').textContent=counts.Deceased||0;
+  const sev = counts.Immediate>=3?'Critical':counts.Immediate>=1?'Major':counts.Delayed>=1?'Moderate':'Minimal';
+  const resc = (counts.Immediate||0)*4+(counts.Delayed||0)*2+(counts.Minor||0)/2;
+  document.getElementById('assessment').innerHTML =
+    `伤情: <strong style="color:#ff9800">${sev}</strong> | 需救援人员: <strong>${resc}</strong>人`;
+
+  //伤员卡片
+  const list=document.getElementById('slist');
+  if(!Object.keys(survivors).length){list.innerHTML='<p style="color:#666;font-size:.8em">未检测到伤员</p>';}
+  else{list.innerHTML=Object.values(survivors).map(s=>`
+    <div class="survivor-card ${s.color}">
+      <div class="id">${s.id.substring(0,8)} · ${((Date.now()/1000)-s.firstSeen).toFixed(0)}s · 节点${s.nodeId}</div>
+      <div class="vital"><span>呼吸: <strong>${s.br?.toFixed(1)??'--'}</strong>/min</span><span>心率: <strong>${s.hr?.toFixed(0)??'--'}</strong>BPM</span></div>
+      <span class="triage-badge ${s.color}">${s.triage}</span>${s.deteriorating?'<span class="deteriorating"> ⚠ 恶化</span>':''}</div>`).join('')}
+
+  //告警
+  const al=document.getElementById('alist');
+  if(!alerts.length){al.innerHTML='<p style="color:#666;font-size:.75em">暂无</p>'}
+  else{al.innerHTML=alerts.slice(0,20).map(a=>`<div class="alert-item prio${a.priority}"><span class="time">${a.time}</span> ${a.id}: ${a.msg}</div>`).join('')}
+
+  draw();
+}
+
+function rssiDist(r){const ref=-30,n=3.0;return Math.pow(10,(ref-Math.max(-90,r))/(10*n))}
+function avg(a){return a.reduce((x,y)=>x+y,0)/a.length}
+
+// ── WebSocket (连接服务器现有 /ws/sensing) ──
+let ws;
+function connect(){
+  ws=new WebSocket(`ws://${location.host}/ws/sensing`);
+  ws.onopen=()=>{document.getElementById('sd').className='dot online';document.getElementById('st').textContent='已连接'};
+  ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==='sensing_update')handleUpdate(d)}catch(e){}}
+  ws.onclose=()=>{document.getElementById('sd').className='dot offline';document.getElementById('st').textContent='断开·5s重连';setTimeout(connect,5000)};
+  ws.onerror=()=>ws.close();
+}
+
+function toggleSkel(){
+  skelOn=!skelOn;
+  const b=document.getElementById('sk-btn');
+  b.textContent=skelOn?'已开启':'关闭';
+  b.className=skelOn?'on':'';
+  if(ws&&ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({cmd:skelOn?'enable_skeleton':'disable_skeleton'}));
+}
+
+draw();connect();
+</script>
+</body>
+</html>
