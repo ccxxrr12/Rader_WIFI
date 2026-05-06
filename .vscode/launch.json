@@ -44,6 +44,28 @@
                     "ignoreFailures": false
                 }
             ]
+        },
+        {
+            "name": "GDB (ESP32-C5)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/firmware/esp32-c5-csi-node/build/esp32-c5-csi-node.elf",
+            "cwd": "${workspaceFolder}/firmware/esp32-c5-csi-node",
+            "MIMode": "gdb",
+            "miDebuggerPath": "riscv32-esp-elf-gdb",
+            "miDebuggerServerAddress": "localhost:1234",
+            "setupCommands": [
+                {
+                    "description": "Set remote hardware breakpoint limit (ESP32-C5 has 2)",
+                    "text": "set remote hardware-breakpoint-limit 2",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Set remote hardware watchpoint limit (ESP32-C5 has 2)",
+                    "text": "set remote hardware-watchpoint-limit 2",
+                    "ignoreFailures": false
+                }
+            ]
         }
     ]
 }

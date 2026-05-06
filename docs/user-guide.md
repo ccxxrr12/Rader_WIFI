@@ -19,7 +19,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 4. [Data Sources](#data-sources)
    - [Simulated Mode (No Hardware)](#simulated-mode-no-hardware)
    - [Windows WiFi (RSSI Only)](#windows-wifi-rssi-only)
-   - [ESP32-S3 (Full CSI)](#esp32-s3-full-csi)
+   - [ESP32-C5/S3 (Full CSI)](#esp32-c5s3-full-csi)
    - [ESP32 Multistatic Mesh (Advanced)](#esp32-multistatic-mesh-advanced)
 5. [REST API Reference](#rest-api-reference)
 6. [WebSocket Streaming](#websocket-streaming)
@@ -35,7 +35,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
     - [CRV Signal-Line Protocol](#crv-signal-line-protocol)
 13. [RVF Model Containers](#rvf-model-containers)
 14. [Hardware Setup](#hardware-setup)
-    - [ESP32-S3 Mesh](#esp32-s3-mesh)
+    - [ESP32-C5/S3 Mesh](#esp32-c5s3-mesh)
     - [Intel 5300 / Atheros NIC](#intel-5300--atheros-nic)
 15. [Docker Compose (Multi-Service)](#docker-compose-multi-service)
 16. [Testing Firmware Without Hardware (QEMU)](#testing-firmware-without-hardware-qemu)
@@ -67,9 +67,11 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 
 | Option | Cost | Capabilities |
 |--------|------|-------------|
-| ESP32-S3 mesh (3-6 boards) | ~$54 | Full CSI: pose, breathing, heartbeat, presence |
+| ESP32-C5/S3 mesh (3-6 boards) | ~$54 | Full CSI: pose, breathing, heartbeat, presence |
 | Intel 5300 / Atheros AR9580 | $50-100 | Full CSI with 3x3 MIMO (Linux only) |
 | Any WiFi laptop | $0 | RSSI-only: coarse presence and motion detection |
+
+> 💡 **ESP32-C5 is recommended for CSI sensing** — WiFi 6 provides 4× more subcarriers (484 vs 114) and superior channel resolution per Espressif benchmarks.
 
 No hardware? The system runs in **simulated mode** with synthetic CSI data.
 
@@ -279,9 +281,9 @@ Uses `iw dev <iface> scan` to capture RSSI. Requires `CAP_NET_ADMIN` (root) for 
 sudo ./target/release/sensing-server --source linux --http-port 3000 --ws-port 3001 --tick-ms 500
 ```
 
-### ESP32-S3 (Full CSI)
+### ESP32-C5/S3 (Full CSI)
 
-Real Channel State Information at 20 Hz with 56-192 subcarriers. Required for pose estimation, vital signs, and through-wall sensing.
+Real Channel State Information at 20 Hz with 56-484 subcarriers. Required for pose estimation, vital signs, and through-wall sensing. **ESP32-C5 is recommended** for higher subcarrier count and WiFi 6 capabilities, while ESP32-S3 remains fully supported.
 
 ```bash
 # From source
@@ -291,11 +293,11 @@ Real Channel State Information at 20 Hz with 56-192 subcarriers. Required for po
 docker run -p 3000:3000 -p 3001:3001 -p 5005:5005/udp -e CSI_SOURCE=esp32 ruvnet/wifi-densepose:latest
 ```
 
-The ESP32 nodes stream binary CSI frames over UDP to port 5005. See [Hardware Setup](#esp32-s3-mesh) for flashing instructions.
+The ESP32 nodes stream binary CSI frames over UDP to port 5005. See [Hardware Setup](#esp32-c5s3-mesh) for flashing instructions.
 
 ### ESP32 Multistatic Mesh (Advanced)
 
-For higher accuracy with through-wall tracking, deploy 3-6 ESP32-S3 nodes in a **multistatic mesh** configuration. Each node acts as both transmitter and receiver, creating multiple sensing paths through the environment.
+For higher accuracy with through-wall tracking, deploy 3-6 ESP32-C5/S3 nodes in a **multistatic mesh** configuration. Each node acts as both transmitter and receiver, creating multiple sensing paths through the environment.
 
 ```bash
 # Start the aggregator with multistatic mode
@@ -309,7 +311,7 @@ The mesh uses a **Time-Division Multiplexing (TDM)** protocol so nodes take turn
 | TDM coordination | Nodes cycle through TX/RX slots (configurable guard intervals) |
 | Channel hopping | Automatic 2.4/5 GHz band cycling for multiband fusion |
 | QUIC transport | TLS 1.3-encrypted streams on aggregator nodes (ADR-032a) |
-| Manual crypto fallback | HMAC-SHA256 beacon auth on constrained ESP32-S3 nodes |
+| Manual crypto fallback | HMAC-SHA256 beacon auth on constrained ESP32-C5/S3 nodes |
 | Attention-weighted fusion | Cross-viewpoint attention with geometric diversity bias |
 
 See [ADR-029](adr/ADR-029-ruvsense-multistatic-sensing-mode.md) and [ADR-032](adr/ADR-032-multistatic-mesh-security-hardening.md) for the full design.
@@ -477,7 +479,7 @@ The system extracts breathing rate and heart rate from CSI signal fluctuations u
 | Heart rate | 0.8-2.0 Hz | 40-120 BPM | Bandpass filter + FFT peak |
 
 **Requirements:**
-- CSI-capable hardware (ESP32-S3 or research NIC) for accurate readings
+- CSI-capable hardware (ESP32-C5/S3 or research NIC) for accurate readings
 - Subject within ~3-5 meters of an access point (up to ~8 m with multistatic mesh)
 - Relatively stationary subject (large movements mask vital sign oscillations)
 
@@ -804,12 +806,12 @@ An RVF file contains: model weights, HNSW vector index, quantization codebooks, 
 
 ## Hardware Setup
 
-### ESP32-S3 Mesh
+### ESP32-C5/S3 Mesh
 
-A 3-6 node ESP32-S3 mesh provides full CSI at 20 Hz. Total cost: ~$54 for a 3-node setup.
+A 3-6 node ESP32-C5/S3 mesh provides full CSI at 20 Hz. Total cost: ~$54 for a 3-node setup.
 
 **What you need:**
-- 3-6x ESP32-S3 development boards (~$8 each)
+- 3-6x ESP32-C5 or ESP32-S3 development boards (~$8 each)
 - A WiFi router (the CSI source)
 - A computer running the sensing server (aggregator)
 
@@ -1366,7 +1368,7 @@ Install PyYAML: `pip install pyyaml`
 No. Run `docker run -p 3000:3000 ruvnet/wifi-densepose:latest` and open `http://localhost:3000`. Simulated mode exercises the full pipeline with synthetic data.
 
 **Q: Can consumer WiFi laptops do pose estimation?**
-No. Consumer WiFi exposes only RSSI (one number per access point), not CSI (56+ complex subcarrier values per frame). RSSI supports coarse presence and motion detection. Full pose estimation requires CSI-capable hardware like an ESP32-S3 ($8) or a research NIC.
+No. Consumer WiFi exposes only RSSI (one number per access point), not CSI (56+ complex subcarrier values per frame). RSSI supports coarse presence and motion detection. Full pose estimation requires CSI-capable hardware like an ESP32-C5/S3 ($8) or a research NIC.
 
 **Q: How accurate is the pose estimation?**
 Accuracy depends on hardware and environment. With a 3-node ESP32 mesh in a single room, the system tracks 17 COCO keypoints. The core algorithm follows the CMU "DensePose From WiFi" paper ([arXiv:2301.00250](https://arxiv.org/abs/2301.00250)). The MERIDIAN domain generalization system (ADR-027) reduces cross-environment accuracy loss from 40-70% to under 15% via 10-second automatic calibration.
@@ -1383,8 +1385,8 @@ The system uses WiFi radio signals, not cameras. No images or video are captured
 **Q: What's the Python vs Rust difference?**
 The Rust implementation (v2) is 810x faster than Python (v1) for the full CSI pipeline. The Docker image is 132 MB vs 569 MB. Rust is the primary and recommended runtime. Python v1 remains available for legacy workflows.
 
-**Q: Can I use an ESP8266 instead of ESP32-S3?**
-No. The ESP8266 does not expose WiFi Channel State Information (CSI) through its SDK, has insufficient RAM (~80 KB vs 512 KB), and runs a single-core 80 MHz CPU that cannot handle the signal processing pipeline. The ESP32-S3 is the minimum supported CSI capture device. See [Issue #138](https://github.com/ruvnet/RuView/issues/138) for alternatives including using cheap Android TV boxes as aggregation hubs.
+**Q: Can I use an ESP8266 instead of ESP32-C5/S3?**
+No. The ESP8266 does not expose WiFi Channel State Information (CSI) through its SDK, has insufficient RAM (~80 KB vs 512 KB), and runs a single-core 80 MHz CPU that cannot handle the signal processing pipeline. ESP32-C5 and ESP32-S3 are the supported CSI capture devices. See [Issue #138](https://github.com/ruvnet/RuView/issues/138) for alternatives including using cheap Android TV boxes as aggregation hubs.
 
 **Q: Does the Windows WiFi tutorial work on Windows 10?**
 Yes. Community-tested on Windows 10 (build 26200) with an Intel Wi-Fi 6 AX201 160MHz adapter on a 5 GHz network. All 7 tutorial steps passed with Python 3.14. See [Issue #36](https://github.com/ruvnet/RuView/issues/36) for full test results.

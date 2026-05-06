@@ -135,7 +135,7 @@ class ValidationReport:
 
 def check_node_booted(log_text: str) -> bool:
     """Return True if the log shows a boot indicator."""
-    boot_patterns = [r"app_main\(\)", r"main_task:", r"main:", r"ESP32-S3 CSI Node"]
+    boot_patterns = [r"app_main\(\)", r"main_task:", r"main:", r"ESP32-[SC]5 CSI Node", r"ESP32-S3 CSI Node"]
     return any(re.search(p, log_text) for p in boot_patterns)
 
 

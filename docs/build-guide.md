@@ -494,6 +494,48 @@ This captures 10 seconds of data, produces feature JSON, and verifies the hash a
 
 ---
 
+### ESP32-C5 Build
+
+ESP32-C5 is the next-generation RISC-V based chip with WiFi 6 (802.11ax) support. It provides up to 484 subcarriers — 4× more than ESP32-S3's 114 — enabling superior CSI resolution for pose estimation and vital sign detection.
+
+**Prerequisites:**
+- ESP-IDF **v5.5 or later** (C5 support added in v5.5)
+- RISC-V toolchain (included with ESP-IDF v5.5+, no separate install needed)
+
+**Set up ESP-IDF v5.5+:**
+
+```bash
+mkdir -p ~/esp
+cd ~/esp
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+git checkout v5.5  # Or later release
+./install.sh esp32c5
+. ./export.sh
+```
+
+**Build and flash:**
+
+```bash
+cd firmware/esp32-c5-csi-node
+
+# Set target chip (RISC-V)
+idf.py set-target esp32c5
+
+# Configure WiFi SSID/password and aggregator IP
+idf.py menuconfig
+# Navigate to: Component config > WiFi-DensePose CSI Node
+
+# Build and flash
+idf.py build flash monitor
+```
+
+> ⚠️ **RISC-V note:** ESP32-C5 uses the RISC-V architecture (not Xtensa like S3). The RISC-V toolchain (`riscv32-esp-elf-gcc`) is included with ESP-IDF v5.5+. For GDB debugging, use `riscv32-esp-elf-gdb` instead of `xtensa-esp-elf-gdb`.
+
+**Firmware reference:** `firmware/esp32-c5-csi-node/`
+
+---
+
 ## 7. Environment-Specific Builds
 
 ### Browser (WASM)

@@ -432,7 +432,7 @@ detect_wifi_hardware() {
     echo -e "  ${BOLD}CSI Capability Assessment:${RESET}"
     if $HAS_WIFI; then
         echo -e "  ${GREEN}*${RESET} RSSI-based presence detection: ${GREEN}available${RESET} (commodity WiFi)"
-        echo -e "  ${DIM}*${RESET} Full CSI extraction: requires ESP32-S3 mesh or Intel 5300/Atheros NIC"
+        echo -e "  ${DIM}*${RESET} Full CSI extraction: requires ESP32-C5/S3 mesh or Intel 5300/Atheros NIC"
         echo -e "  ${DIM}*${RESET} DensePose estimation: requires 3+ ESP32 nodes or research-grade NIC"
     else
         echo -e "  ${DIM}*${RESET} No WiFi = build/verify only (no live sensing)"
@@ -702,19 +702,19 @@ install_wasm_deps() {
 
 install_iot_deps() {
     echo ""
-    echo -e "  ${CYAN}IoT (ESP32) dependencies:${RESET}"
+    echo -e "  ${CYAN}IoT (ESP32-C5/S3) dependencies:${RESET}"
     if $HAS_ESPIDF; then
         ok "ESP-IDF already available"
     else
         echo ""
         echo "  ESP-IDF is required for ESP32 firmware builds."
-        echo "  Install guide: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/"
+        echo "  Install guide: https://docs.espressif.com/projects/esp-idf/en/latest/esp32c5/get-started/"
         echo ""
         echo "  Quick install:"
         echo "    mkdir -p ~/esp && cd ~/esp"
         echo "    git clone --recursive https://github.com/espressif/esp-idf.git"
         echo "    cd esp-idf && git checkout v5.2"
-        echo "    ./install.sh esp32s3"
+        echo "    ./install.sh esp32s3   # or: ./install.sh esp32c5 for C5 (recommended, WiFi 6)"
         echo "    . ./export.sh"
         warn "ESP-IDF not installed. Aggregator will be built but firmware flashing requires ESP-IDF."
     fi
@@ -980,8 +980,17 @@ post_install() {
             echo "    docker run --rm -v \"\$(pwd):/project\" -w /project \\"
             echo "      espressif/idf:v5.2 bash -c 'idf.py set-target esp32s3 && idf.py build'"
             echo ""
+            echo "    # 2b. Build C5 firmware (WiFi 6, recommended):"
+            echo "    cd firmware/esp32-c5-csi-node"
+            echo "    docker run --rm -v \"\$(pwd):/project\" -w /project \\"
+            echo "      espressif/idf:v5.5 bash -c 'idf.py set-target esp32c5 && idf.py build'"
+            echo ""
             echo "    # 3. Flash to ESP32-S3 (replace COM7 with your port):"
             echo "    cd build && python -m esptool --chip esp32s3 --port COM7 \\"
+            echo "      --baud 460800 write-flash @flash_args"
+            echo ""
+            echo "    # 3b. Flash to ESP32-C5 (replace COM7 with your port):"
+            echo "    cd build && python -m esptool --chip esp32c5 --port COM7 \\"
             echo "      --baud 460800 write-flash @flash_args"
             echo ""
             echo "    # 4. Run the aggregator:"
@@ -1017,7 +1026,7 @@ post_install() {
 
     echo ""
     echo -e "  ${BOLD}RVF Container Sizes:${RESET}"
-    echo "    IoT (ESP32):        ~0.7 MB  (int4 quantized)"
+    echo "    IoT (ESP32-C5/S3):   ~0.7 MB  (int4 quantized)"
     echo "    Browser (Chrome):   ~10 MB   (int8 quantized)"
     echo "    Mobile (WebView):   ~6 MB    (int8 quantized)"
     echo "    Field (Disaster):   ~62 MB   (fp16 weights)"

@@ -368,3 +368,183 @@ jobs:
           path: |
             build/swarm-results/
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # ESP32-C5 QEMU Test
+  #
+  # Builds and tests the ESP32-C5 firmware under QEMU (riscv32-softmmu target).
+  # ---------------------------------------------------------------------------
+  build-qemu-c5:
+    name: Build Espressif QEMU (C5)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache QEMU C5 build
+        id: cache-qemu-c5
+        uses: actions/cache@v4
+        with:
+          path: /opt/qemu-esp32c5
+          key: qemu-esp32c5-${{ env.QEMU_BRANCH }}-v2
+          restore-keys: |
+            qemu-esp32c5-${{ env.QEMU_BRANCH }}-
+
+      - name: Install QEMU build dependencies
+        if: steps.cache-qemu-c5.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential ninja-build pkg-config \
+            libglib2.0-dev libpixman-1-dev libslirp-dev \
+            libgcrypt20-dev \
+            python3 python3-venv
+
+      - name: Clone and build Espressif QEMU (riscv32)
+        if: steps.cache-qemu-c5.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 -b "$QEMU_BRANCH" "$QEMU_REPO" /tmp/qemu-esp-c5
+          cd /tmp/qemu-esp-c5
+          mkdir build && cd build
+          ../configure \
+            --target-list=riscv32-softmmu \
+            --prefix=/opt/qemu-esp32c5 \
+            --enable-slirp \
+            --disable-werror
+          ninja -j$(nproc)
+          ninja install
+
+      - name: Verify QEMU binary
+        run: |
+          file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || wc -c < "$1"; }
+          /opt/qemu-esp32c5/bin/qemu-system-riscv32 --version
+          echo "QEMU C5 binary size: $(file_size /opt/qemu-esp32c5/bin/qemu-system-riscv32) bytes"
+
+      - name: Upload QEMU C5 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-esp32c5
+          path: /opt/qemu-esp32c5/
+          retention-days: 7
+
+  qemu-test-c5:
+    name: QEMU C5 Test (${{ matrix.nvs_config }})
+    needs: build-qemu-c5
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5
+
+    strategy:
+      fail-fast: false
+      matrix:
+        nvs_config:
+          - default
+          - full-adr060
+          - edge-tier0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download QEMU C5 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-esp32c5
+          path: /opt/qemu-esp32c5
+
+      - name: Make QEMU executable
+        run: chmod +x /opt/qemu-esp32c5/bin/qemu-system-riscv32
+
+      - name: Verify QEMU works
+        run: /opt/qemu-esp32c5/bin/qemu-system-riscv32 --version
+
+      - name: Install Python dependencies
+        run: |
+          . $IDF_PATH/export.sh
+          pip install esptool esp-idf-nvs-partition-gen
+
+      - name: Set target ESP32-C5
+        working-directory: firmware/esp32-c5-csi-node
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py set-target esp32c5
+
+      - name: Build firmware (mock CSI mode)
+        working-directory: firmware/esp32-c5-csi-node
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py \
+            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.qemu.c5" \
+            build
+
+      - name: Generate NVS matrix
+        run: |
+          . $IDF_PATH/export.sh
+          python3 scripts/generate_nvs_matrix.py \
+            --output-dir firmware/esp32-c5-csi-node/build/nvs_matrix \
+            --only ${{ matrix.nvs_config }}
+
+      - name: Create merged flash image
+        working-directory: firmware/esp32-c5-csi-node
+        run: |
+          . $IDF_PATH/export.sh
+
+          OTA_ARGS=""
+          if [ -f build/ota_data_initial.bin ]; then
+            OTA_ARGS="0xf000 build/ota_data_initial.bin"
+          fi
+
+          python3 -m esptool --chip esp32c5 merge_bin \
+            -o build/qemu_flash.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            --fill-flash-size 8MB \
+            0x0     build/bootloader/bootloader.bin \
+            0x8000  build/partition_table/partition-table.bin \
+            $OTA_ARGS \
+            0x20000 build/esp32-csi-node.bin
+
+          file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || wc -c < "$1"; }
+          echo "Flash image size: $(file_size build/qemu_flash.bin) bytes"
+
+      - name: Inject NVS partition
+        if: matrix.nvs_config != 'default'
+        working-directory: firmware/esp32-c5-csi-node
+        run: |
+          NVS_BIN="build/nvs_matrix/nvs_${{ matrix.nvs_config }}.bin"
+          if [ -f "$NVS_BIN" ]; then
+            file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || wc -c < "$1"; }
+            echo "Injecting NVS: $NVS_BIN ($(file_size "$NVS_BIN") bytes)"
+            dd if="$NVS_BIN" of=build/qemu_flash.bin \
+              bs=1 seek=$((0x9000)) conv=notrunc 2>/dev/null
+          else
+            echo "WARNING: NVS binary not found: $NVS_BIN"
+          fi
+
+      - name: Run QEMU smoke test
+        env:
+          QEMU_PATH: /opt/qemu-esp32c5/bin/qemu-system-riscv32
+          QEMU_TIMEOUT: "90"
+        run: |
+          echo "Starting QEMU C5 (timeout: ${QEMU_TIMEOUT}s)..."
+
+          timeout "$QEMU_TIMEOUT" "$QEMU_PATH" \
+            -machine esp32c5 \
+            -nographic \
+            -drive file=firmware/esp32-c5-csi-node/build/qemu_flash.bin,if=mtd,format=raw \
+            -serial mon:stdio \
+            -nic user,model=open_eth,net=10.0.2.0/24 \
+            -no-reboot \
+            2>&1 | tee firmware/esp32-c5-csi-node/build/qemu_output.log || true
+
+          echo "QEMU C5 finished. Log size: $(wc -l < firmware/esp32-c5-csi-node/build/qemu_output.log) lines"
+
+      - name: Validate QEMU output
+        run: |
+          python3 scripts/validate_qemu_output.py \
+            firmware/esp32-c5-csi-node/build/qemu_output.log
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-logs-c5-${{ matrix.nvs_config }}
+          path: |
+            firmware/esp32-c5-csi-node/build/qemu_output.log
+            firmware/esp32-c5-csi-node/build/nvs_matrix/
+          retention-days: 14

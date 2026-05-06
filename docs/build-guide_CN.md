@@ -381,13 +381,13 @@ docker stack deploy -c docker-compose.prod.yml wifi-densepose
 
 ## 6. ESP32硬件设置
 
-使用ESP32-S3板作为WiFi CSI传感器节点。完整规范参见[ADR-012](adr/ADR-012-esp32-csi-sensor-mesh.md)。
+使用ESP32-C5/S3板作为WiFi CSI传感器节点。**推荐 ESP32-C5** — 它支持 WiFi 6 (802.11ax) 提供更好的 CSI 分辨率和带宽。完整规范参见[ADR-012](adr/ADR-012-esp32-csi-sensor-mesh.md)。
 
 ### 材料清单(入门套件--$54)
 
 | 项目 | 数量 | 单价 | 总价 |
 |------|-----|-----------|-------|
-| ESP32-S3-DevKitC-1 | 3 | $10 | $30 |
+| ESP32-C5/S3-DevKitC-1 | 3 | $10 | $30 |
 | USB-A到USB-C线缆 | 3 | $3 | $9 |
 | USB电源适配器(多端口) | 1 | $15 | $15 |
 | 消费级WiFi路由器(任意) | 1 | $0 (现有) | $0 |
@@ -397,6 +397,25 @@ docker stack deploy -c docker-compose.prod.yml wifi-densepose
 ### 前置要求
 
 安装ESP-IDF(Espressif的官方开发框架):
+
+**对于 ESP32-C5 (推荐):**
+
+```bash
+# 克隆ESP-IDF (C5 需要 v5.5+)
+mkdir -p ~/esp
+cd ~/esp
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+git checkout v5.5  # C5 需要 v5.5+
+
+# 安装 RISC-V 工具链 (C5 使用 RISC-V 架构)
+./install.sh esp32c5
+
+# 激活环境(每次会话运行)
+. ./export.sh
+```
+
+**对于 ESP32-S3:**
 
 ```bash
 # 克隆ESP-IDF
@@ -413,7 +432,7 @@ git checkout v5.2  # 固定到测试版本
 . ./export.sh
 ```
 
-### 刷写节点
+### 刷写节点 (ESP32-S3)
 
 ```bash
 cd firmware/esp32-csi-node
@@ -437,6 +456,33 @@ idf.py build flash monitor
 `idf.py monitor`显示实时串行输出,包括CSI回调数据。按`Ctrl+]`退出。
 
 对每个节点重复此操作,递增节点ID。
+
+### 刷写节点 (ESP32-C5) 🆕
+
+ESP32-C5 使用 RISC-V 架构和 ESP-IDF v5.5+,提供 WiFi 6 CSI 采集:
+
+```bash
+cd firmware/esp32-c5-csi-node
+
+# 设置目标芯片 (RISC-V)
+idf.py set-target esp32c5
+
+# 配置WiFi SSID/密码和聚合器IP
+idf.py menuconfig
+# 导航到: Component config > WiFi-DensePose CSI Node
+#   - 设置WiFi SSID
+#   - 设置WiFi密码
+#   - 设置聚合器IP地址
+#   - 设置节点ID(1、2、3、...)
+#   - 设置采样率(10-100 Hz)
+#   - WiFi 6 模式: 可选 1024-QAM / 160 MHz 带宽
+
+# 构建并刷写(连接USB线缆)
+idf.py build flash monitor
+```
+
+> [!NOTE]
+> C5 的 WiFi 6 支持 1024-QAM 调制和 160 MHz 带宽,提供比 S3 (WiFi 4) 更高的 CSI 子载波分辨率。这显著提升姿态估计和生命体征检测精度。
 
 ### 固件项目结构
 

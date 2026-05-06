@@ -2,7 +2,7 @@
 """
 QEMU Swarm Health Oracle (ADR-062)
 
-Validates collective health of a multi-node ESP32-S3 QEMU swarm.
+Validates collective health of a multi-node ESP32-C5/S3 QEMU swarm.
 Checks cross-node assertions like TDM ordering, inter-node communication,
 and swarm-level frame rates.
 
@@ -99,7 +99,8 @@ def _node_count_from_dir(log_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 _BOOT_PATTERNS = [
-    r"app_main\(\)", r"main_task:", r"main:", r"ESP32-S3 CSI Node",
+    r"app_main\(\)", r"main_task:", r"main:", r"ESP32-[SC]5 CSI Node",
+    r"ESP32-S3 CSI Node",
 ]
 
 _CRASH_PATTERNS = [

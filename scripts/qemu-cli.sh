@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# qemu-cli.sh — Unified QEMU ESP32-S3 testing CLI (ADR-061)
+# qemu-cli.sh — Unified QEMU ESP32-C5/S3 testing CLI (ADR-061)
 # Version: 1.0.0
 #
 # Single entry point for all QEMU testing operations.
@@ -37,16 +37,23 @@ need_qemu() {
 }
 
 detect_qemu() {
+    local arch="${1:-xtensa}"
+    local qemu_bin
+    if [[ "$arch" == "riscv32" ]]; then
+        qemu_bin="qemu-system-riscv32"
+    else
+        qemu_bin="qemu-system-xtensa"
+    fi
     # 1. Explicit env var
     if [[ -n "${QEMU_PATH:-}" ]] && [[ -x "$QEMU_PATH" ]]; then
         echo "$QEMU_PATH"; return 0
     fi
     # 2. On PATH
     local qemu
-    qemu="$(command -v qemu-system-xtensa 2>/dev/null || true)"
+    qemu="$(command -v "$qemu_bin" 2>/dev/null || true)"
     if [[ -n "$qemu" ]]; then echo "$qemu"; return 0; fi
     # 3. Espressif default build location
-    local espressif_qemu="$HOME/.espressif/qemu/build/qemu-system-xtensa"
+    local espressif_qemu="$HOME/.espressif/qemu/build/${qemu_bin}"
     if [[ -x "$espressif_qemu" ]]; then echo "$espressif_qemu"; return 0; fi
     return 1
 }
@@ -58,14 +65,14 @@ detect_python() {
 # --- Command: help ---------------------------------------------------------
 cmd_help() {
     cat <<EOF
-${BOLD}qemu-cli.sh${RST} v${VERSION} — Unified QEMU ESP32-S3 testing CLI
+${BOLD}qemu-cli.sh${RST} v${VERSION} — Unified QEMU ESP32-C5/S3 testing CLI
 
 ${BOLD}USAGE${RST}
     qemu-cli.sh <command> [options]
 
 ${BOLD}COMMANDS${RST}
     ${CYAN}install${RST}             Install QEMU with ESP32-S3 support
-    ${CYAN}test${RST}                Run single-node firmware test
+    ${CYAN}test${RST} [--chip C5|S3]  Run single-node firmware test (default: S3)
     ${CYAN}mesh${RST} [N]            Run multi-node mesh test (default: 3 nodes)
     ${CYAN}swarm${RST} [args]        Run swarm configurator (qemu_swarm.py)
     ${CYAN}snapshot${RST} [args]     Run snapshot-based tests
@@ -106,7 +113,7 @@ EOF
 cmd_install() {
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
         echo "Usage: qemu-cli.sh install"
-        echo "Install QEMU with Espressif ESP32-S3 support."
+        echo "Install QEMU with Espressif ESP32-C5/S3 support."
         return 0
     fi
     local installer="$SCRIPT_DIR/install-qemu.sh"
@@ -131,14 +138,25 @@ EOF
 
 # --- Command: test ----------------------------------------------------------
 cmd_test() {
+    local chip="s3"
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-        echo "Usage: qemu-cli.sh test [--timeout N] [extra args...]"
-        echo "Run single-node QEMU ESP32-S3 firmware test."
+        echo "Usage: qemu-cli.sh test [--chip C5|S3] [--timeout N] [extra args...]"
+        echo "Run single-node QEMU ESP32-C5/S3 firmware test."
         return 0
     fi
+    if [[ "${1:-}" == "--chip" ]]; then
+        chip="${2,,}"  # lowercase
+        shift 2
+        # Normalize: c5/esp32c5 → c5, s3/esp32s3 → s3
+        chip="${chip#esp32}"
+    fi
     need_qemu
-    info "Running single-node firmware test ..."
-    bash "$SCRIPT_DIR/qemu-esp32s3-test.sh" "$@"
+    info "Running single-node firmware test (ESP32-${chip^^}) ..."
+    if [[ "$chip" == "c5" ]]; then
+        bash "$SCRIPT_DIR/qemu-esp32c5-test.sh" "$@"
+    else
+        bash "$SCRIPT_DIR/qemu-esp32s3-test.sh" "$@"
+    fi
 }
 
 # --- Command: mesh ----------------------------------------------------------
@@ -253,7 +271,7 @@ cmd_health() {
 cmd_status() {
     # Status should never fail — disable errexit locally
     set +e
-    echo -e "${BOLD}=== QEMU ESP32-S3 Testing Status ===${RST}"
+    echo -e "${BOLD}=== QEMU ESP32-C5/S3 Testing Status ===${RST}"
     echo ""
 
     # QEMU

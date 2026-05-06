@@ -40,8 +40,10 @@ const ESP32_CSI_MAGIC: u32 = 0xC5110001;
 /// ADR-018 header size in bytes (before I/Q data).
 const HEADER_SIZE: usize = 20;
 
-/// Maximum valid subcarrier count for ESP32 (80 MHz bandwidth).
-const MAX_SUBCARRIERS: usize = 256;
+/// Maximum valid subcarrier count.
+/// ESP32-C5 WiFi 6 40MHz HE: up to 484 subcarriers.
+/// ESP32-S3 WiFi 4 40MHz HT: up to 114 subcarriers.
+const MAX_SUBCARRIERS: usize = 512;
 
 /// Maximum antenna count for ESP32.
 const MAX_ANTENNAS: u8 = 4;

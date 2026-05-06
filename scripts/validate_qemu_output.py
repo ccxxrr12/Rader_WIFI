@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QEMU ESP32-S3 UART Output Validator (ADR-061)
+QEMU ESP32-C5/S3 UART Output Validator (ADR-061)
 
 Parses the UART log captured from a QEMU firmware run and validates
 16 checks covering boot, NVS, mock CSI, edge processing, vitals,
@@ -128,7 +128,7 @@ def validate_log(log_text: str) -> ValidationReport:
 
     # ---- Check 1: Boot ----
     # Look for app_main() entry or main_task: tag
-    boot_patterns = [r"app_main\(\)", r"main_task:", r"main:", r"ESP32-S3 CSI Node"]
+    boot_patterns = [r"app_main\(\)", r"main_task:", r"main:", r"ESP32-[SC]5 CSI Node", r"ESP32-S3 CSI Node"]
     boot_found = any(re.search(p, log_text) for p in boot_patterns)
     if boot_found:
         report.add("Boot", Severity.PASS, "Firmware booted successfully")
@@ -367,7 +367,7 @@ def validate_log(log_text: str) -> ValidationReport:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate QEMU ESP32-S3 UART output (ADR-061)",
+        description="Validate QEMU ESP32-C5/S3 UART output (ADR-061)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Example: python3 validate_qemu_output.py build/qemu_output.log",
     )

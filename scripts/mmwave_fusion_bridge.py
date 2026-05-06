@@ -3,7 +3,7 @@
 ADR-063 Phase 6: Real-time mmWave + WiFi CSI Fusion Bridge
 
 Reads two serial ports simultaneously:
-  - COM7 (ESP32-S3): WiFi CSI edge processing vitals
+  - COM7 (ESP32-C5/S3): WiFi CSI edge processing vitals
   - COM4 (ESP32-C6 + MR60BHA2): 60 GHz mmWave HR/BR via ESPHome
 
 Fuses heart rate and breathing rate using weighted Kalman-style averaging
@@ -108,7 +108,7 @@ def read_mmwave_serial(port: str, baud: int, state: SensorState, stop: threading
 
 
 def read_csi_serial(port: str, baud: int, state: SensorState, stop: threading.Event):
-    """Read edge_proc vitals from ESP32-S3 CSI node."""
+    """Read edge_proc vitals from ESP32-C5/S3 CSI node."""
     try:
         ser = serial.Serial(port, baud, timeout=1)
         print(f"[CSI]    Connected to {port} at {baud} baud")
@@ -206,7 +206,7 @@ def fuse_and_display(mmwave: SensorState, csi: SensorState, stop: threading.Even
 
 def main():
     parser = argparse.ArgumentParser(description="ADR-063 mmWave + CSI Fusion Bridge")
-    parser.add_argument("--csi-port", default="COM7", help="ESP32-S3 CSI serial port")
+    parser.add_argument("--csi-port", default="COM7", help="ESP32-C5/S3 CSI serial port")
     parser.add_argument("--mmwave-port", default="COM4", help="ESP32-C6 mmWave serial port")
     parser.add_argument("--csi-baud", type=int, default=115200)
     parser.add_argument("--mmwave-baud", type=int, default=115200)
