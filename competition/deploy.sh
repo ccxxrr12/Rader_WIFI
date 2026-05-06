@@ -61,14 +61,20 @@ kill_port $UDP_PORT
 echo -e "  ${GREEN}✓${NC} 端口已释放"
 
 # ── 3. 启动服务 ──────────────────────────────────
-echo -e "${CYAN}[3/5] 启动 Sensing Server...${NC}"
+# 复制分诊仪表盘到 UI 目录
+echo -e "${CYAN}[3/5] 部署分诊仪表盘...${NC}"
+cp "$TRIAGE_UI" "$UI_DIR/triage.html"
+echo -e "  ${GREEN}✓${NC} triage.html → $UI_DIR/"
+
+echo -e "${CYAN}[4/5] 启动 Sensing Server...${NC}"
 
 $SENSING_BIN \
     --http-port $HTTP_PORT \
     --ws-port $WS_PORT \
     --udp-port $UDP_PORT \
     --ui-path "$UI_DIR" \
-    --triage-ui "$TRIAGE_UI" \
+    --bind-addr 0.0.0.0 \
+    --source auto \
     > /tmp/ruview-server.log 2>&1 &
 
 SERVER_PID=$!
@@ -110,7 +116,7 @@ check_udp
 echo ""
 echo -e "${CYAN}[5/5] 部署完成!${NC}"
 echo ""
-echo -e "  ${GREEN}▶${NC} 分诊仪表盘:  ${CYAN}http://localhost:$HTTP_PORT/triage.html${NC}"
+echo -e "  ${GREEN}▶${NC} 分诊仪表盘:  ${CYAN}http://localhost:$HTTP_PORT/ui/triage.html${NC}"
 echo -e "  ${GREEN}▶${NC} 3D 可视化:    ${CYAN}http://localhost:$HTTP_PORT${NC}"
 echo -e "  ${GREEN}▶${NC} 服务器日志:   ${CYAN}tail -f /tmp/ruview-server.log${NC}"
 echo -e "  ${GREEN}▶${NC} 停止服务:     ${CYAN}kill $SERVER_PID${NC}"

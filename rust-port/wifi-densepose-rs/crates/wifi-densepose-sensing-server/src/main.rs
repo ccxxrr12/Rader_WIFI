@@ -155,8 +155,8 @@ struct Esp32Frame {
     magic: u32,
     node_id: u8,
     n_antennas: u8,
-    n_subcarriers: u8,
-    freq_mhz: u16,
+    n_subcarriers: u16,  /* ADR-018: u16 LE, C5 can have up to 484 */
+    freq_mhz: u32,       /* ADR-018: u32 LE */
     sequence: u32,
     rssi: i8,
     noise_floor: i8,
@@ -304,12 +304,12 @@ struct AppStateInner {
     active_sona_profile: Option<String>,
     /// Whether a trained model is loaded.
     model_loaded: bool,
-    /// Smoothed person count (EMA) for hysteresis — prevents frame-to-frame jumping.
+    /// Smoothed person count (EMA) for hysteresis �?prevents frame-to-frame jumping.
     smoothed_person_score: f64,
     /// Previous person count for hysteresis (asymmetric up/down thresholds).
     prev_person_count: usize,
     // ── Motion smoothing & adaptive baseline (ADR-047 tuning) ────────────
-    /// EMA-smoothed motion score (alpha ~0.15 for ~10 FPS → ~1s time constant).
+    /// EMA-smoothed motion score (alpha ~0.15 for ~10 FPS �?~1s time constant).
     smoothed_motion: f64,
     /// Current classification state for hysteresis debounce.
     current_motion_level: String,
@@ -510,11 +510,11 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
 
     let node_id = buf[4];
     let n_antennas = buf[5];
-    let n_subcarriers = buf[6];
-    let freq_mhz = u16::from_le_bytes([buf[8], buf[9]]);
-    let sequence = u32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
-    let rssi = buf[14] as i8;
-    let noise_floor = buf[15] as i8;
+    let n_subcarriers = u16::from_le_bytes([buf[6], buf[7]]);
+    let freq_mhz = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let sequence = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    let rssi = buf[16] as i8;
+    let noise_floor = buf[17] as i8;
 
     let iq_start = 20;
     let n_pairs = n_antennas as usize * n_subcarriers as usize;
@@ -653,8 +653,8 @@ fn generate_signal_field(
 /// Approach:
 /// 1. Build a scalar time series by computing the mean amplitude of each historical frame.
 /// 2. Run a peak-detection pass: count rising-edge zero-crossings of the de-meaned signal.
-/// 3. Convert the crossing rate to Hz, clipped to the physiological range 0.1–0.5 Hz
-///    (12–30 breaths/min).
+/// 3. Convert the crossing rate to Hz, clipped to the physiological range 0.1�?.5 Hz
+///    (12�?0 breaths/min).
 ///
 /// For accuracy the function additionally applies a simple 3-tap Goertzel-style power
 /// estimate at evenly-spaced candidate frequencies in the breathing band and returns
@@ -771,9 +771,9 @@ fn compute_subcarrier_variances(frame_history: &VecDeque<Vec<f64>>, n_sub: usize
 /// - **Motion detection**: uses frame-to-frame temporal difference (mean L2 change
 ///   between the current frame and the previous frame) normalised by signal amplitude,
 ///   so that actual changes are detected rather than just a threshold on the current frame.
-/// - **Breathing rate**: estimated via Goertzel filter bank on the 0.1–0.5 Hz band of
+/// - **Breathing rate**: estimated via Goertzel filter bank on the 0.1�?.5 Hz band of
 ///   the amplitude time series.
-/// - **Signal quality**: based on SNR estimate (RSSI – noise floor) and subcarrier
+/// - **Signal quality**: based on SNR estimate (RSSI �?noise floor) and subcarrier
 ///   variance stability.
 /// Returns (features, raw_classification, breathing_rate_hz, sub_variances, raw_motion_score).
 fn extract_features_from_frame(
@@ -854,7 +854,7 @@ fn extract_features_from_frame(
             0.0
         }
     } else {
-        // No history yet — fall back to intra-frame variance-based estimate.
+        // No history yet �?fall back to intra-frame variance-based estimate.
         (intra_variance / (mean_amp * mean_amp + 1e-9)).sqrt().clamp(0.0, 1.0)
     };
 
@@ -868,7 +868,7 @@ fn extract_features_from_frame(
     // ── Signal quality metric ──
     // Based on estimated SNR (RSSI relative to noise floor) and subcarrier consistency.
     let snr_db = (frame.rssi as f64 - frame.noise_floor as f64).max(0.0);
-    let snr_quality = (snr_db / 40.0).clamp(0.0, 1.0); // 40 dB → quality = 1.0
+    let snr_quality = (snr_db / 40.0).clamp(0.0, 1.0); // 40 dB �?quality = 1.0
     // Penalise quality when temporal variance is very high (unstable signal).
     let stability = (1.0 - (temporal_variance / (mean_amp * mean_amp + 1e-9)).clamp(0.0, 1.0)).max(0.0);
     let signal_quality = (snr_quality * 0.6 + stability * 0.4).clamp(0.0, 1.0);
@@ -886,7 +886,7 @@ fn extract_features_from_frame(
         spectral_power,
     };
 
-    // Return raw motion_score and signal_quality — classification is done by
+    // Return raw motion_score and signal_quality �?classification is done by
     // `smooth_and_classify()` which has access to EMA state and hysteresis.
     let raw_classification = ClassificationInfo {
         motion_level: raw_classify(motion_score),
@@ -897,7 +897,7 @@ fn extract_features_from_frame(
     (features, raw_classification, breathing_rate_hz, sub_variances, motion_score)
 }
 
-/// Simple threshold classification (no smoothing) — used as the "raw" input.
+/// Simple threshold classification (no smoothing) �?used as the "raw" input.
 fn raw_classify(score: f64) -> String {
     // Lowered thresholds for Windows WiFi mode (RSSI-based, less sensitive than CSI)
     if score > 0.15 { "active".into() }
@@ -943,7 +943,7 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 
     // 5. Hysteresis debounce: require N consecutive frames agreeing on a new state.
     if candidate == state.current_motion_level {
-        // Already in this state — reset debounce.
+        // Already in this state �?reset debounce.
         state.debounce_counter = 0;
         state.debounce_candidate = candidate;
     } else if candidate == state.debounce_candidate {
@@ -954,7 +954,7 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
             state.debounce_counter = 0;
         }
     } else {
-        // New candidate — restart counter.
+        // New candidate �?restart counter.
         state.debounce_candidate = candidate;
         state.debounce_counter = 1;
     }
@@ -1204,8 +1204,8 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
             magic: 0xC511_0001,
             node_id: 0,
             n_antennas: 1,
-            n_subcarriers: obs_count.min(255) as u8,
-            freq_mhz: 2437,
+            n_subcarriers: obs_count.min(u16::MAX as usize) as u16,
+            freq_mhz: 2437u32,
             sequence: seq,
             rssi: first_rssi.clamp(-128.0, 127.0) as i8,
             noise_floor: -90,
@@ -1361,7 +1361,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
         node_id: 0,
         n_antennas: 1,
         n_subcarriers: 1,
-        freq_mhz: 2437,
+        freq_mhz: 2437u32,
         sequence: seq,
         rssi: rssi_dbm as i8,
         noise_floor: -90,
@@ -1507,8 +1507,8 @@ fn generate_simulated_frame(tick: u64) -> Esp32Frame {
         magic: 0xC511_0001,
         node_id: 1,
         n_antennas: 1,
-        n_subcarriers: n_sub as u8,
-        freq_mhz: 2437,
+        n_subcarriers: n_sub as u16,
+        freq_mhz: 2437u32,
         sequence: tick as u32,
         rssi: (-40.0 + 5.0 * (t * 0.2).sin()) as i8,
         noise_floor: -90,
@@ -1591,8 +1591,8 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                         if let Ok(sensing) = serde_json::from_str::<SensingUpdate>(&json) {
                             if sensing.msg_type == "sensing_update" {
                                 // Determine pose estimation mode for the UI indicator.
-                                // "model_inference"    — a trained RVF model is loaded.
-                                // "signal_derived"     — keypoints estimated from raw CSI features.
+                                // "model_inference"    �?a trained RVF model is loaded.
+                                // "signal_derived"     �?keypoints estimated from raw CSI features.
                                 let model_loaded = {
                                     let s = state.read().await;
                                     s.model_loaded
@@ -1724,7 +1724,7 @@ async fn latest(State(state): State<SharedState>) -> Json<serde_json::Value> {
 /// Estimate person count from CSI features using a weighted composite heuristic.
 ///
 /// Single ESP32 link limitations: variance-based detection can reliably detect
-/// 1-2 persons. 3+ is speculative and requires ≥3 nodes for spatial resolution.
+/// 1-2 persons. 3+ is speculative and requires �? nodes for spatial resolution.
 ///
 /// Returns a raw score (0.0..1.0) that the caller converts to person count
 /// after temporal smoothing.
@@ -1748,7 +1748,7 @@ fn compute_person_score(feat: &FeatureInfo) -> f64 {
     //     suggests multiple reflectors. Scale by 500.0.
     let sp_norm = (feat.spectral_power / 500.0).clamp(0.0, 1.0);
 
-    // Weighted composite — variance and change_points carry the most signal.
+    // Weighted composite �?variance and change_points carry the most signal.
     var_norm * 0.35 + cp_norm * 0.30 + motion_norm * 0.20 + sp_norm * 0.15
 }
 
@@ -1756,14 +1756,14 @@ fn compute_person_score(feat: &FeatureInfo) -> f64 {
 ///
 /// Uses asymmetric thresholds: higher threshold to *add* a person, lower to
 /// *drop* one.  This prevents flickering when the score hovers near a boundary
-/// (the #1 user-reported issue — see #237, #249, #280, #292).
+/// (the #1 user-reported issue �?see #237, #249, #280, #292).
 fn score_to_person_count(smoothed_score: f64, prev_count: usize) -> usize {
     // Up-thresholds (must exceed to increase count):
-    //   1→2: 0.65  (raised from 0.50 — multipath in small rooms hit 0.50 easily)
-    //   2→3: 0.85  (raised from 0.80 — 3 persons needs strong sustained signal)
+    //   1�?: 0.65  (raised from 0.50 �?multipath in small rooms hit 0.50 easily)
+    //   2�?: 0.85  (raised from 0.80 �?3 persons needs strong sustained signal)
     // Down-thresholds (must drop below to decrease count):
-    //   2→1: 0.45  (hysteresis gap of 0.20)
-    //   3→2: 0.70  (hysteresis gap of 0.15)
+    //   2�?: 0.45  (hysteresis gap of 0.20)
+    //   3�?: 0.70  (hysteresis gap of 0.15)
     match prev_count {
         0 | 1 => {
             if smoothed_score > 0.85 {
@@ -1780,7 +1780,7 @@ fn score_to_person_count(smoothed_score: f64, prev_count: usize) -> usize {
             } else if smoothed_score < 0.45 {
                 1
             } else {
-                2 // hold — within hysteresis band
+                2 // hold �?within hysteresis band
             }
         }
         _ => {
@@ -2114,7 +2114,7 @@ async fn stream_status(State(state): State<SharedState>) -> Json<serde_json::Val
 
 // ── Model Management Endpoints ──────────────────────────────────────────────
 
-/// GET /api/v1/models — list discovered RVF model files.
+/// GET /api/v1/models �?list discovered RVF model files.
 async fn list_models(State(state): State<SharedState>) -> Json<serde_json::Value> {
     // Re-scan directory each call so newly-added files are visible.
     let models = scan_model_files();
@@ -2126,7 +2126,7 @@ async fn list_models(State(state): State<SharedState>) -> Json<serde_json::Value
     Json(serde_json::json!({ "models": models, "total": total }))
 }
 
-/// GET /api/v1/models/active — return currently loaded model or null.
+/// GET /api/v1/models/active �?return currently loaded model or null.
 async fn get_active_model(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match &s.active_model_id {
@@ -2142,7 +2142,7 @@ async fn get_active_model(State(state): State<SharedState>) -> Json<serde_json::
     }
 }
 
-/// POST /api/v1/models/load — load a model by ID.
+/// POST /api/v1/models/load �?load a model by ID.
 async fn load_model(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -2162,7 +2162,7 @@ async fn load_model(
     Json(serde_json::json!({ "success": true, "model_id": model_id }))
 }
 
-/// POST /api/v1/models/unload — unload the current model.
+/// POST /api/v1/models/unload �?unload the current model.
 async fn unload_model(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     let prev = s.active_model_id.take();
@@ -2171,7 +2171,7 @@ async fn unload_model(State(state): State<SharedState>) -> Json<serde_json::Valu
     Json(serde_json::json!({ "success": true, "previous": prev }))
 }
 
-/// DELETE /api/v1/models/:id — delete a model file.
+/// DELETE /api/v1/models/:id �?delete a model file.
 async fn delete_model(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -2206,14 +2206,14 @@ async fn delete_model(
     }
 }
 
-/// GET /api/v1/models/lora/profiles — list LoRA adapter profiles.
+/// GET /api/v1/models/lora/profiles �?list LoRA adapter profiles.
 async fn list_lora_profiles() -> Json<serde_json::Value> {
     // LoRA profiles are discovered from data/models/*.lora.json
     let profiles = scan_lora_profiles();
     Json(serde_json::json!({ "profiles": profiles }))
 }
 
-/// POST /api/v1/models/lora/activate — activate a LoRA adapter profile.
+/// POST /api/v1/models/lora/activate �?activate a LoRA adapter profile.
 async fn activate_lora_profile(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
@@ -2289,13 +2289,13 @@ fn scan_lora_profiles() -> Vec<serde_json::Value> {
 
 // ── Recording Endpoints ─────────────────────────────────────────────────────
 
-/// GET /api/v1/recording/list — list CSI recordings.
+/// GET /api/v1/recording/list �?list CSI recordings.
 async fn list_recordings() -> Json<serde_json::Value> {
     let recordings = scan_recording_files();
     Json(serde_json::json!({ "recordings": recordings }))
 }
 
-/// POST /api/v1/recording/start — start recording CSI data.
+/// POST /api/v1/recording/start �?start recording CSI data.
 async fn start_recording(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -2394,7 +2394,7 @@ async fn start_recording(
     Json(serde_json::json!({ "success": true, "recording_id": id }))
 }
 
-/// POST /api/v1/recording/stop — stop recording CSI data.
+/// POST /api/v1/recording/stop �?stop recording CSI data.
 async fn stop_recording(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     if !s.recording_active {
@@ -2430,7 +2430,7 @@ async fn stop_recording(State(state): State<SharedState>) -> Json<serde_json::Va
     }))
 }
 
-/// DELETE /api/v1/recording/:id — delete a recording file.
+/// DELETE /api/v1/recording/:id �?delete a recording file.
 async fn delete_recording(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -2478,7 +2478,7 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                // Count lines (frames) — approximate for large files
+                // Count lines (frames) �?approximate for large files
                 let frame_count = std::fs::read_to_string(&path)
                     .map(|s| s.lines().count())
                     .unwrap_or(0);
@@ -2499,7 +2499,7 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
 
 // ── Training Endpoints ──────────────────────────────────────────────────────
 
-/// GET /api/v1/train/status — get training status.
+/// GET /api/v1/train/status �?get training status.
 async fn train_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     Json(serde_json::json!({
@@ -2508,7 +2508,7 @@ async fn train_status(State(state): State<SharedState>) -> Json<serde_json::Valu
     }))
 }
 
-/// POST /api/v1/train/start — start a training run.
+/// POST /api/v1/train/start �?start a training run.
 async fn train_start(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -2530,7 +2530,7 @@ async fn train_start(
     }))
 }
 
-/// POST /api/v1/train/stop — stop the current training run.
+/// POST /api/v1/train/stop �?stop the current training run.
 async fn train_stop(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     if s.training_status != "running" {
@@ -2549,7 +2549,7 @@ async fn train_stop(State(state): State<SharedState>) -> Json<serde_json::Value>
 
 // ── Adaptive classifier endpoints ────────────────────────────────────────────
 
-/// POST /api/v1/adaptive/train — train the adaptive classifier from recordings.
+/// POST /api/v1/adaptive/train �?train the adaptive classifier from recordings.
 async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let rec_dir = PathBuf::from("data/recordings");
     eprintln!("=== Adaptive Classifier Training ===");
@@ -2592,7 +2592,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
     }
 }
 
-/// GET /api/v1/adaptive/status — check adaptive model status.
+/// GET /api/v1/adaptive/status �?check adaptive model status.
 async fn adaptive_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match &s.adaptive_model {
@@ -2611,7 +2611,7 @@ async fn adaptive_status(State(state): State<SharedState>) -> Json<serde_json::V
     }
 }
 
-/// POST /api/v1/adaptive/unload — unload the adaptive model (revert to thresholds).
+/// POST /api/v1/adaptive/unload �?unload the adaptive model (revert to thresholds).
 async fn adaptive_unload(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     s.adaptive_model = None;
@@ -2649,7 +2649,7 @@ async fn vital_signs_endpoint(State(state): State<SharedState>) -> Json<serde_js
     }))
 }
 
-/// GET /api/v1/edge-vitals — latest edge vitals from ESP32 (ADR-039).
+/// GET /api/v1/edge-vitals �?latest edge vitals from ESP32 (ADR-039).
 async fn edge_vitals_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match &s.edge_vitals {
@@ -2665,7 +2665,7 @@ async fn edge_vitals_endpoint(State(state): State<SharedState>) -> Json<serde_js
     }
 }
 
-/// GET /api/v1/wasm-events — latest WASM events from ESP32 (ADR-040).
+/// GET /api/v1/wasm-events �?latest WASM events from ESP32 (ADR-040).
 async fn wasm_events_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match &s.latest_wasm_events {
@@ -2770,11 +2770,11 @@ async fn info_page() -> Html<String> {
          <h1>WiFi-DensePose Sensing Server</h1>\
          <p>Rust + Axum + RuVector</p>\
          <ul>\
-         <li><a href='/health'>/health</a> — Server health</li>\
-         <li><a href='/api/v1/sensing/latest'>/api/v1/sensing/latest</a> — Latest sensing data</li>\
-         <li><a href='/api/v1/vital-signs'>/api/v1/vital-signs</a> — Vital sign estimates (HR/RR)</li>\
-         <li><a href='/api/v1/model/info'>/api/v1/model/info</a> — RVF model container info</li>\
-         <li>ws://localhost:8765/ws/sensing — WebSocket stream</li>\
+         <li><a href='/health'>/health</a> �?Server health</li>\
+         <li><a href='/api/v1/sensing/latest'>/api/v1/sensing/latest</a> �?Latest sensing data</li>\
+         <li><a href='/api/v1/vital-signs'>/api/v1/vital-signs</a> �?Vital sign estimates (HR/RR)</li>\
+         <li><a href='/api/v1/model/info'>/api/v1/model/info</a> �?RVF model container info</li>\
+         <li>ws://localhost:8765/ws/sensing �?WebSocket stream</li>\
          </ul>\
          </body></html>"
     ))

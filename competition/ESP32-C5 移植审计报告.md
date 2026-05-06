@@ -394,9 +394,40 @@ if (channel >= 1 && channel <= 13) {
 | 脚本 | 7 |
 | CI/CD | 2 |
 | 文档 | 10 |
-| Rust | 1 |
+| Rust | 2 |
 | VS Code | 1 |
-| **合计** | **38** |
+| **合计** | **39** |
+
+## 十一、深度审计追加修复 (2026-05-06 17:37)
+
+对竞赛关键代码路径逐行审计，发现 1 个阻断性 Bug：
+
+### 🔴 Rust ADR-018 解析器字节偏移错误
+
+**文件：** `rust-port/wifi-densepose-rs/crates/wifi-densepose-sensing-server/src/main.rs:501`
+
+`parse_esp32_frame()` 函数的字节偏移与 C5 固件输出的 ADR-018 格式不匹配：
+
+| 字段 | ADR-018 格式 | 原解析器 (错误) | 修复后 |
+|------|-------------|----------------|--------|
+| n_subcarriers | buf[6..7] u16 LE | buf[6] u8 (只读1字节!) | u16::from_le_bytes([buf[6],[7]]) |
+| freq_mhz | buf[8..11] u32 LE | buf[8..9] u16 (只读2字节!) | u32::from_le_bytes([buf[8..11]]) |
+| sequence | buf[12..15] u32 | buf[10..13] u32 (偏移错!) | buf[12..15] |
+| rssi | buf[16] i8 | buf[14] i8 (偏移错!) | buf[16] |
+| noise_floor | buf[17] i8 | buf[15] i8 (偏移错!) | buf[17] |
+
+**影响：** 此 bug 导致 RSSI/噪声读的是 I/Q 数据而非元数据、子载波数被截断到 ≤255、频率字段错位。**原始 S3 固件的 CSI 数据也从未被正确解析过。**
+
+**修复：** 同时修正了 `parse_esp32_frame()` 字节偏移和 `Esp32Frame` 结构体类型 (`n_subcarriers: u8→u16`, `freq_mhz: u16→u32`)，并更新了所有引用旧类型的构造代码。
+
+**其他审计验证通过项：**
+- ✅ `csi_collector.c` C5 条件编译正确
+- ✅ `main.c` C5 WiFi 双频配置正确
+- ✅ `edge_processing.h` C5 子载波常量正确
+- ✅ `hardware/esp32_parser.rs` ADR-018 格式正确（独立实现，不受 main.rs bug 影响）
+- ✅ ESP32 UDP 接收器 (main.rs:2785) 正确处理 3 种 magic
+- ✅ `VitalSignDetector` 完整 FFT 呼吸/心率管道
+- ✅ 所有 sdkconfig 选项经 Kconfig 文件验证
 
 ---
 
