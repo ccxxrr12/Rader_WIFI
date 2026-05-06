@@ -1,0 +1,72 @@
+# 竞赛 WASM 模块清单
+# ESP32-C5 边缘 WASM 运行时加载的模块列表
+# 只编译医疗+基础模块, 其余不参与竞赛构建
+
+# ── 竞赛保留模块 (10个) ──
+
+[module.med_sleep_apnea]
+name = "睡眠呼吸暂停检测"
+description = "检测呼吸暂停事件 (>10秒无呼吸), 触发 Immediate 分诊"
+enabled = true
+
+[module.med_cardiac_arrhythmia]
+name = "心律失常检测"
+description = "RR间期变异分析, 检测房颤/早搏"
+enabled = true
+
+[module.med_respiratory_distress]
+name = "呼吸窘迫检测"
+description = "呼吸频率>30/min 或 <8/min 持续检测"
+enabled = true
+
+[module.med_seizure_detect]
+name = "癫痫发作检测"
+description = "周期性大幅度运动模式识别"
+enabled = true
+
+[module.med_gait_analysis]
+name = "步态分析"
+description = "行走模式异常检测 (跛行/拖曳)"
+enabled = true
+
+[module.vital_trend]
+name = "生命体征趋势"
+description = "30秒滑动窗口趋势分析 + 恶化预警"
+enabled = true
+
+[module.gesture]
+name = "手势识别"
+description = "挥手/求救手势检测"
+enabled = true
+
+[module.intrusion]
+name = "入侵检测"
+description = "区域闯入检测 (可用于检测救援人员进入)"
+enabled = true
+
+[module.occupancy]
+name = "占用检测"
+description = "空间人员计数"
+enabled = true
+
+[module.coherence]
+name = "相干性门控"
+description = "CSI信号质量评估, 过滤低质量帧"
+enabled = true
+
+# ── 竞赛排除模块 (55个) ──
+# 以下模块为商业/实验/非医疗用途, 竞赛不编译:
+# - ais_*.rs          AI安全 (2个)
+# - exo_*.rs          实验性功能 (11个): ghost_hunter, music_conductor, plant_growth等
+# - ret_*.rs          零售场景 (5个): customer_flow, dwell_heatmap等
+# - bld_*.rs          智能建筑 (5个): hvac, lighting, meeting_room等
+# - ind_*.rs          工业场景 (3个): forklift, livestock, structural
+# - sec_*.rs          安防场景 (4个): loitering, perimeter, tailgating, weapon
+# - spt_*.rs          运动分析 (2个): micro_hnsw, pagerank
+# - sig_*.rs          信号处理 (5个): flash_attention, sparse_recovery等
+# - lrn_*.rs          学习算法 (3个): dtw_gesture, ewc, meta_adapt
+# - tmp_*.rs          时序逻辑 (3个): goap, pattern, temporal_logic
+# - qnt_*.rs          量子计算 (2个): quantum_coherence, interference_search
+# - aut_*.rs          自治系统 (2个): self_healing, psycho_symbolic
+# - adv_*.rs          对抗学习 (1个): adversarial
+# - rvf.rs            RVF容器 (独立crate已有)

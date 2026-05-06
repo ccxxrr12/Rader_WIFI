@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>π RuView — 伤员分诊仪表盘</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background:#0a0e17; color:#e0e0e0; overflow:hidden; height:100vh; }
+
+/* 顶部标题栏 */
+.header { background:linear-gradient(135deg, #1a1f2e, #0d1117); padding:10px 20px; border-bottom:2px solid #2a3040; display:flex; align-items:center; justify-content:space-between; }
+.header h1 { font-size:1.3em; color:#4fc3f7; }
+.header .status { font-size:0.8em; color:#78909c; }
+.header .status .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+.header .status .dot.online { background:#4caf50; box-shadow:0 0 6px #4caf50; }
+.header .status .dot.offline { background:#f44336; }
+
+/* 布局 */
+.main { display:grid; grid-template-columns:1fr 300px; height:calc(100vh - 56px); }
+.map-area { position:relative; background:#111827; }
+.sidebar { background:#161b25; border-left:1px solid #2a3040; overflow-y:auto; padding:12px; }
+
+/* 统计栏 */
+.stats { display:flex; gap:8px; margin-bottom:12px; }
+.stat-card { flex:1; text-align:center; padding:8px 4px; border-radius:6px; background:#1a1f2e; }
+.stat-card .count { font-size:1.5em; font-weight:bold; }
+.stat-card .label { font-size:0.7em; color:#78909c; }
+.stat-card.red { border-left:3px solid #f44336; }
+.stat-card.red .count { color:#f44336; }
+.stat-card.yellow { border-left:3px solid #ff9800; }
+.stat-card.yellow .count { color:#ff9800; }
+.stat-card.green { border-left:3px solid #4caf50; }
+.stat-card.green .count { color:#4caf50; }
+.stat-card.black { border-left:3px solid #607d8b; }
+.stat-card.black .count { color:#607d8b; }
+.stat-card.total { border-left:3px solid #4fc3f7; }
+.stat-card.total .count { color:#4fc3f7; }
+
+/* 伤员卡片 */
+.survivor-card { background:#1a1f2e; border-radius:8px; padding:10px; margin-bottom:8px; border-left:4px solid #4fc3f7; cursor:pointer; transition:all 0.2s; }
+.survivor-card:hover { background:#222940; }
+.survivor-card.red { border-left-color:#f44336; }
+.survivor-card.yellow { border-left-color:#ff9800; }
+.survivor-card.green { border-left-color:#4caf50; }
+.survivor-card.black { border-left-color:#607d8b; }
+.survivor-card .id { font-size:0.8em; color:#78909c; }
+.survivor-card .vital { display:flex; gap:12px; margin:4px 0; font-size:0.85em; }
+.survivor-card .vital span { color:#b0bec5; }
+.survivor-card .vital span strong { color:#e0e0e0; }
+.survivor-card .triage-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.75em; font-weight:bold; margin-top:4px; }
+.triage-badge.red { background:#f4433633; color:#f44336; }
+.triage-badge.yellow { background:#ff980033; color:#ff9800; }
+.triage-badge.green { background:#4caf5033; color:#4caf50; }
+.triage-badge.black { background:#607d8b33; color:#607d8b; }
+.survivor-card .deteriorating { color:#ff9800; font-size:0.7em; animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+/* 告警列表 */
+.alerts { margin-top:12px; }
+.alerts h3 { font-size:0.9em; color:#78909c; margin-bottom:8px; }
+.alert-item { font-size:0.75em; padding:6px; border-radius:4px; margin-bottom:4px; background:#1a1f2e; }
+.alert-item.prio1 { border-left:3px solid #f44336; }
+.alert-item.prio2 { border-left:3px solid #ff9800; }
+.alert-item .time { color:#78909c; }
+
+/* 地图 */
+#room-map { width:100%; height:100%; cursor:default; }
+.map-legend { position:absolute; bottom:15px; left:15px; background:#1a1f2ecc; padding:8px; border-radius:6px; font-size:0.7em; }
+.map-legend div { margin:3px 0; display:flex; align-items:center; gap:6px; }
+.map-legend .dot { width:10px; height:10px; border-radius:50%; }
+
+/* 3D 骨架面板 (可折叠) */
+.skeleton-panel { background:#1a1f2e; border-radius:8px; padding:8px; margin-bottom:8px; font-size:0.8em; }
+.skeleton-panel .toggle-btn { background:#2196f3; color:white; border:none; padding:4px 12px; border-radius:4px; cursor:pointer; font-size:0.8em; }
+.skeleton-panel .toggle-btn.off { background:#424242; }
+.skeleton-panel .toggle-btn:hover { opacity:0.85; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>π RuView — 伤员分诊仪表盘</h1>
+  <div class="status"><span class="dot online" id="status-dot"></span><span id="status-text">等待连接...</span></div>
+</div>
+
+<div class="main">
+  <div class="map-area">
+    <canvas id="room-map"></canvas>
+    <div class="map-legend">
+      <div><span class="dot" style="background:#f44336"></span> Immediate (红) — 立即救治</div>
+      <div><span class="dot" style="background:#ff9800"></span> Delayed (黄) — 延迟救治</div>
+      <div><span class="dot" style="background:#4caf50"></span> Minor (绿) — 轻伤</div>
+      <div><span class="dot" style="background:#607d8b"></span> Deceased (黑) — 无生命体征</div>
+      <div><span class="dot" style="background:#4fc3f7;border-radius:0;width:10px;height:10px"></span> C5 感知节点</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="stats" id="stats-bar">
+      <div class="stat-card total"><div class="count" id="stat-total">0</div><div class="label">总计</div></div>
+      <div class="stat-card red"><div class="count" id="stat-red">0</div><div class="label">紧急</div></div>
+      <div class="stat-card yellow"><div class="count" id="stat-yellow">0</div><div class="label">延迟</div></div>
+      <div class="stat-card green"><div class="count" id="stat-green">0</div><div class="label">轻伤</div></div>
+      <div class="stat-card black"><div class="count" id="stat-black">0</div><div class="label">死亡</div></div>
+    </div>
+
+    <div id="assessment" style="font-size:0.75em;color:#78909c;margin-bottom:8px;"></div>
+
+    <div class="skeleton-panel">
+      <span style="color:#78909c;">3D 骨架重建:</span>
+      <button class="toggle-btn off" id="skeleton-toggle" onclick="toggleSkeleton()">关闭</button>
+      <span style="font-size:0.7em;color:#666;margin-left:5px;">(ONNX · 可选)</span>
+    </div>
+
+    <div id="survivor-list"><p style="color:#666;font-size:0.8em;">等待 CSI 数据...</p></div>
+
+    <div class="alerts">
+      <h3>⚠ 告警记录</h3>
+      <div id="alert-list"><p style="color:#666;font-size:0.75em;">暂无告警</p></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 配置 ──
+const WS_URL = 'ws://' + location.host + '/ws/triage';
+const NODE_POSITIONS = [
+    { id:1, x:400, y:150, label:'C5 #1' },
+    { id:2, x:150, y:400, label:'C5 #2' },
+    { id:3, x:650, y:400, label:'C5 #3' },
+];
+const ROOM_W = 800, ROOM_H = 520;
+const MARGIN = 40;
+let skeletonEnabled = false;
+
+// ── Canvas ──
+const canvas = document.getElementById('room-map');
+canvas.width = ROOM_W;
+canvas.height = ROOM_H;
+const ctx = canvas.getContext('2d');
+
+function drawRoom() {
+    ctx.clearRect(0, 0, ROOM_W, ROOM_H);
+
+    // 背景网格
+    ctx.strokeStyle = '#1a2332';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < ROOM_W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,ROOM_H); ctx.stroke(); }
+    for (let y = 0; y < ROOM_H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(ROOM_W,y); ctx.stroke(); }
+
+    // 房间边界
+    ctx.strokeStyle = '#2a3040';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(MARGIN, MARGIN, ROOM_W - 2*MARGIN, ROOM_H - 2*MARGIN);
+
+    // 尺寸标注
+    ctx.fillStyle = '#555';
+    ctx.font = '11px monospace';
+    ctx.fillText('4m', ROOM_W/2-10, MARGIN-5);
+    ctx.fillText('3m', MARGIN-35, ROOM_H/2+4);
+}
+
+function drawNodes() {
+    for (const node of NODE_POSITIONS) {
+        // 感知范围虚线
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 120, 0, Math.PI*2);
+        ctx.strokeStyle = '#1a4a6e';
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 节点
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 8, 0, Math.PI*2);
+        ctx.fillStyle = '#4fc3f7';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // 标签
+        ctx.fillStyle = '#4fc3f7';
+        ctx.font = '11px sans-serif';
+        ctx.fillText(node.label, node.x-18, node.y-14);
+    }
+}
+
+function drawSurvivors(survivors) {
+    for (const s of survivors) {
+        const pos = s.position || { x:0, y:0, z:0 };
+        const sx = MARGIN + (pos.x + 2) / 4 * (ROOM_W - 2*MARGIN);
+        const sy = MARGIN + (pos.y + 1.5) / 3 * (ROOM_H - 2*MARGIN);
+        const cx = Math.max(MARGIN, Math.min(ROOM_W-MARGIN, sx));
+        const cy = Math.max(MARGIN, Math.min(ROOM_H-MARGIN, sy));
+        const color = s.triage_color;
+
+        // 脉冲效果 (紧急伤员)
+        if (s.triage === 'Immediate' || s.is_deteriorating) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, 25, 0, Math.PI*2);
+            ctx.fillStyle = color + '22';
+            ctx.fill();
+        }
+
+        // 伤员圆点
+        ctx.beginPath();
+        ctx.arc(cx, cy, 12, 0, Math.PI*2);
+        const grad = ctx.createRadialGradient(cx-3, cy-3, 2, cx, cy, 14);
+        grad.addColorStop(0, '#fff');
+        grad.addColorStop(0.6, color);
+        grad.addColorStop(1, color + '88');
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // ID
+        const shortId = s.id.substring(0, 8);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(shortId, cx, cy-18);
+
+        // 呼吸率
+        if (s.vitals.breathing_rate) {
+            ctx.font = '9px sans-serif';
+            ctx.fillStyle = '#4fc3f7';
+            ctx.fillText(s.vitals.breathing_rate.toFixed(0)+'/min', cx, cy+22);
+        }
+    }
+}
+
+function render(data) {
+    drawRoom();
+    drawNodes();
+    if (data.survivors) drawSurvivors(data.survivors);
+}
+
+// ── 侧边栏更新 ──
+function updateStats(data) {
+    const a = data.assessment || {};
+    document.getElementById('stat-total').textContent = a.total || 0;
+    document.getElementById('stat-red').textContent = a.immediate || 0;
+    document.getElementById('stat-yellow').textContent = a.delayed || 0;
+    document.getElementById('stat-green').textContent = a.minor || 0;
+    document.getElementById('stat-black').textContent = a.deceased || 0;
+
+    const assEl = document.getElementById('assessment');
+    if (a.total > 0) {
+        assEl.innerHTML = `伤情等级: <strong style="color:#ff9800">${a.severity||'Unknown'}</strong> &nbsp;|&nbsp; 需救援人员: <strong>${a.rescuers_needed||0}</strong>人`;
+    }
+}
+
+function updateSurvivorList(survivors) {
+    const list = document.getElementById('survivor-list');
+    if (!survivors || survivors.length === 0) {
+        list.innerHTML = '<p style="color:#666;font-size:0.8em;">未检测到伤员</p>';
+        return;
+    }
+
+    list.innerHTML = survivors.map(s => `
+        <div class="survivor-card ${s.triage_color}">
+            <div class="id">${s.id.substring(0,8)} · ${s.tracked_seconds.toFixed(0)}秒</div>
+            <div class="vital">
+                <span>呼吸: <strong>${s.vitals.breathing_rate?.toFixed(1) ?? '--'}</strong>/min</span>
+                <span>心率: <strong>${s.vitals.heart_rate?.toFixed(0) ?? '--'}</strong> BPM</span>
+            </div>
+            <span class="triage-badge ${s.triage_color}">${s.triage}</span>
+            ${s.is_deteriorating ? '<span class="deteriorating"> ⚠ 恶化中</span>' : ''}
+        </div>
+    `).join('');
+}
+
+function updateAlerts(alerts) {
+    const el = document.getElementById('alert-list');
+    if (!alerts || alerts.length === 0) {
+        el.innerHTML = '<p style="color:#666;font-size:0.75em;">暂无告警</p>';
+        return;
+    }
+    el.innerHTML = alerts.slice(-10).reverse().map(a => `
+        <div class="alert-item prio${a.priority}">
+            <span class="time">${a.time}</span> ${a.message}
+        </div>
+    `).join('');
+}
+
+// ── WebSocket ──
+let ws;
+function connect() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+        document.getElementById('status-dot').className = 'dot online';
+        document.getElementById('status-text').textContent = '已连接';
+    };
+    ws.onmessage = (evt) => {
+        try {
+            const data = JSON.parse(evt.data);
+            if (data.event_type === 'survivor_update') {
+                render(data);
+                updateStats(data);
+                updateSurvivorList(data.survivors);
+                updateAlerts(data.alerts);
+            }
+        } catch(e) {}
+    };
+    ws.onclose = () => {
+        document.getElementById('status-dot').className = 'dot offline';
+        document.getElementById('status-text').textContent = '已断开 · 5秒后重连';
+        setTimeout(connect, 5000);
+    };
+    ws.onerror = () => ws.close();
+}
+
+// ── 3D 骨架开关 ──
+function toggleSkeleton() {
+    skeletonEnabled = !skeletonEnabled;
+    const btn = document.getElementById('skeleton-toggle');
+    if (skeletonEnabled) {
+        btn.textContent = '已开启';
+        btn.className = 'toggle-btn';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: 'enable_skeleton' }));
+        }
+    } else {
+        btn.textContent = '关闭';
+        btn.className = 'toggle-btn off';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: 'disable_skeleton' }));
+        }
+    }
+}
+
+// ── 启动 ──
+drawRoom();
+drawNodes();
+connect();
+</script>
+</body>
+</html>
