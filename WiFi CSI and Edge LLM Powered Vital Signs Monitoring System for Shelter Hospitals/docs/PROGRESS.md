@@ -61,6 +61,41 @@ cargo check  → ✅ 编译通过
   - warnings 均为非阻断性（缺失文档注释、未使用变量），不影响功能
 ```
 
+### 2.5 triage.html 重写 — 消费服务端 MAT 数据
+
+| # | 修改 | 说明 |
+|---|------|------|
+| 1 | `handleUpdate()` 优先读取 `data.triage_update` | 直接消费服务端 MAT 引擎输出 |
+| 2 | 新增 `renderFromServer()` | 从 `TriageUpdate.assessment` 渲染统计栏、从 `TriageUpdate.survivors` 渲染伤员卡片、从 `TriageUpdate.alerts` 渲染告警列表 |
+| 3 | 保留 `renderFromLocal()` 备用 | 兼容旧版服务器/无 MAT 场景 (JS 端 START 规则) |
+| 4 | Canvas `draw()` 改为服务端位置 `s.position` | 不再用 JS 端 RSSI 三角估算 |
+| 5 | 伤员卡片新增 `estimated_age` 和 `tracked_seconds` | 服务端追踪信息 |
+| 6 | `deploy.sh` 路径修正 | `./competition/triage-ui/` → `./docs/triage-ui/` |
+
+**效果**: triage.html 不再在浏览器端重复计算 START 分诊，完全消费服务端 Rust MAT pipeline 的 `TriageUpdate` 输出。
+
+### 2.6 全目录文档审计修复 (2026-05-09 10:44)
+
+对全部 13 个文档/配置文件逐行审计，修复过时路径和虚假引用：
+
+| # | 文件 | 修复 |
+|---|------|------|
+| 1 | `docs/README_COMPETITION.md` | `competition/`→`docs/`、URL修正、目录树重写、架构图更新 |
+| 2 | `docs/ESP32-C5 移植指南.md` | 矛盾结论统一、固件路径修正、删除不存在文件引用、C5改为推荐 |
+| 3 | `README.md` | 删除不存在文件引用、文档表补全 |
+| 4 | `docs/PROGRESS.md` | 阶段1文件表路径修正 (`competition/`→`docs/`、`rust-port/`→`rust-server/`) |
+| 5 | `docs/竞赛改造方案.md` | N1代码示例重写(TriageEngine)、`competition/` 目录结构更新 |
+| 6 | `docs/竞赛准备清单.md` | WASM数量(65→10)、`competition/`→`docs/` |
+| 7 | `docs/竞赛差距分析.md` | 全局 `competition/`→`docs/` |
+| 8 | `docs/ML架构详解.md` | 删除不存在crate引用 |
+| 9 | `docs/ESP32-C5 移植审计报告.md` | `rust-port/`→`rust-server/` |
+| 10 | `docs/瑞萨 RZV2H 移植计划.md` | `rust-port/`→`rust-server/` |
+| 11 | `docs/目录审计报告.md` | Cargo.lock状态更新 |
+| 12 | `docs/端侧LLM方案设计.md` | candle版本号(0.8→0.4) |
+| 13 | `rust-server/Cargo.toml` | 删除4个幽灵workspace依赖(api/db/wasm/ruvector) |
+
+**审计结论**: 13个文件修复完成，`cargo check` 仍然通过 ✅
+
 ---
 
 ## 进度总览
@@ -69,7 +104,7 @@ cargo check  → ✅ 编译通过
 |:----:|------|:----:|
 | P0 | 进度文档 + 竞赛 README | ✅ |
 | P1 | MAT Pipeline (mat_pipeline.rs) | ✅ 已自审计 |
-| P2 | 分诊仪表盘 (triage.html) | ✅ 已自审计 |
+| P2 | 分诊仪表盘 (triage.html) | ✅ 已重写 (消费服务端 TriageUpdate) |
 | P3 | 竞赛固件配置 | ✅ Kconfig 已验证 |
 | P4 | 部署脚本 (deploy.sh) | ✅ CLI 参数已验证 |
 | P5 | WASM 模块清单 | ✅ |
@@ -86,17 +121,16 @@ cargo check  → ✅ 编译通过
 
 | 文件 | 大小 | 审计状态 |
 |------|------|:--:|
-| `competition/PROGRESS.md` | 2.4KB | ✅ |
-| `competition/README_COMPETITION.md` | 5.1KB | ✅ |
-| `competition/ML架构详解.md` | 12.7KB | ✅ |
-| `competition/竞赛改造方案.md` | 16.8KB | ✅ |
-| `competition/竞赛差距分析.md` | 7.7KB | ✅ |
-| `competition/竞赛准备清单.md` | 14.9KB | ✅ |
-| `competition/triage-ui/triage.html` | 13.7KB | ✅ 连接 `/ws/sensing` |
-| `competition/deploy.sh` | 4.2KB | ✅ CLI 参数正确 |
-| `competition/wasm-modules-competition.toml` | 2.5KB | ✅ |
+| `docs/PROGRESS.md` | — | ✅ |
+| `docs/README_COMPETITION.md` | 5.1KB | ✅ |
+| `docs/ML架构详解.md` | 12.7KB | ✅ |
+| `docs/竞赛改造方案.md` | 16.8KB | ✅ |
+| `docs/竞赛差距分析.md` | 7.7KB | ✅ |
+| `docs/竞赛准备清单.md` | 14.9KB | ✅ |
+| `docs/triage-ui/triage.html` | 14KB | ✅ 连接 `/ws/sensing` |
+| `deploy.sh` | 4.2KB | ✅ CLI 参数正确 |
 | `firmware/*/sdkconfig.defaults.competition` | 1.5KB | ✅ Kconfig 验证 |
-| `rust-port/*/mat_pipeline.rs` | 15.6KB | ✅ 纯分诊层 |
+| `rust-server/crates/wifi-densepose-sensing-server/src/mat_pipeline.rs` | 15.6KB | ✅ 纯分诊层 |
 
 ### 阶段2 (2026-05-09) — Cargo修复 + MAT集成
 

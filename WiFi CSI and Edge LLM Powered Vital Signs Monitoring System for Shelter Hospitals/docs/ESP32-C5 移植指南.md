@@ -1,8 +1,9 @@
 # ESP32-C5 移植指南
 
-## ✅ 验证结论（2026-05-06 更新）
+## ✅ 验证结论（2026-05-09 更新）
 
-**ESP32-C5 已确认支持 CSI！** 乐鑫官方 ESP-CSI 文档明确将 C5 列为 CSI 性能最强的芯片，并提供完整示例代码。
+**ESP32-C5 已确认支持 CSI！** 乐鑫官方 ESP-CSI 文档明确将 C5 列为 CSI 性能最强的芯片。
+**C5 固件已完整移植**，代码位于 `firmware/esp32-c5-csi-node/`，包含竞赛专用配置 `sdkconfig.defaults.competition`。
 
 ### 验证结果
 
@@ -225,7 +226,7 @@ CONFIG_NVS_ENCRYPTION=n
 
 ```bash
 # 进入固件目录
-cd D:\CODING\Repository\Rader_WIFI\firmware\esp32-csi-node
+cd firmware/esp32-c5-csi-node
 
 # 清理旧构建
 idf.py fullclean
@@ -233,8 +234,8 @@ idf.py fullclean
 # 设置目标为 ESP32-C5
 idf.py set-target esp32c5
 
-# 应用 C5 配置文件
-copy sdkconfig.defaults.c5 sdkconfig.defaults
+# 应用竞赛配置文件
+cp sdkconfig.defaults.competition sdkconfig
 
 # 编译（观察是否有 CSI 相关错误）
 idf.py build 2>&1 | Select-String -Pattern "CSI|wifi|error" -Context 2
@@ -355,48 +356,33 @@ static void csi_rx_cb(void *recv_buf, wifi_csi_info_t *info)
 
 ---
 
-## 📝 最终推荐方案
-
-### ✅ 推荐配置：ESP32-S3 × 3 + 瑞萨 RZ/V2H
+## ✅ 推荐方案：ESP32-C5 × 3 + 瑞萨 RZ/V2H
 
 ```
-从节点：ESP32-S3 × 3（完全支持，已验证）
+从节点：ESP32-C5 × 3（WiFi 6，484 子载波，2.4/5GHz 双频）
 主节点：瑞萨 RZ/V2H（运行推理 + 医疗检测 + UI）
 
 连接方式：
-ESP32-S3 → UDP 5005 → 瑞萨 RZ/V2H
+ESP32-C5 → UDP 5005 → 瑞萨 RZ/V2H
 ```
 
 **优点：**
-- ✅ **零风险** - 项目已完全支持 S3
-- ✅ **开发最快** - 无需适配新硬件
-- ✅ **性能最优** - 可专注医疗算法开发
-- ✅ **成本可控** - 总成本约¥300（3 个 S3 + 1 个瑞萨开发板）
+- ✅ **WiFi 6 高分辨率** — 484 子载波，4× 传统 S3 方案
+- ✅ **双频支持** — 2.4GHz + 5GHz 同时工作
+- ✅ **固件已完成** — `firmware/esp32-c5-csi-node/` 竞赛配置就绪
+- ✅ **成本可控** — C5 单价约 ¥68
 
 **采购清单：**
 
 | 型号 | 数量 | 单价 | 总价 | 用途 |
 |------|------|------|------|------|
-| ESP32-S3-DevKitC-1-N8R8 | 3 | ¥65 | ¥195 | CSI 感知节点 |
-| 瑞萨 RZ/V2H 开发板 | 1 | ~¥800 | ~¥800 | 主节点 + 推理 |
-| **总计** | - | - | **~¥995** | - |
-
-**如果比赛要求国产化率：**
-- ESP32 是国产芯片（乐鑫总部在上海）
-- 瑞萨是日本公司，但 RZ/V 系列在中国有大量应用
+| ESP32-C5-DevKitC-1-N8R8 | 3 | ¥68 | ¥204 | CSI 感知节点 |
+| 瑞萨 RZ/V2H 开发板 | 1 | ~¥2800 | ~¥2800 | 主节点 + AI 推理 |
+| **总计** | - | - | **~¥3004** | - |
 
 ---
 
-## ❌ 不推荐方案：ESP32-C5
-
-**原因：**
-1. CSI 支持未确认（最大风险）
-2. 即使支持，API 可能不同，需重写驱动
-3. 比赛时间宝贵，不应在硬件适配上冒险
-
-**仅在以下情况考虑 C5：**
-- 乐鑫官方书面确认 C5 支持 CSI 且 API 兼容
-- 且有充足时间（>2 周）进行适配
+## 📝 备选方案：ESP32-S3
 
 ---
 
@@ -441,5 +427,5 @@ ESP32-S3 → UDP 5005 → 瑞萨 RZ/V2H
 
 - ESP32-C5 数据手册：https://www.espressif.com.cn/products/socs/esp32c5
 - ESP-IDF CSI 示例：https://github.com/espressif/esp-idf/tree/master/examples/wifi/csi
-- ADR-018（二进制帧格式）：`docs/adr/ADR-018-binary-csi-frame-format.md`
-- ADR-029（多静态感知）：`docs/adr/ADR-029-ruvsense-multistatic-sensing-mode.md`
+- 竞赛固件：`firmware/esp32-c5-csi-node/`
+- ADR-018（二进制帧格式）：已在 `main.rs` 中实现 `parse_esp32_frame()`

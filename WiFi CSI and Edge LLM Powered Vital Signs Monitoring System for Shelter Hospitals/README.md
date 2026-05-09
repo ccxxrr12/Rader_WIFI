@@ -126,8 +126,6 @@ ESP32-C5 ×3              RZ/V2H                    7" 触屏 / Web
     ├── ESP32-C5 移植审计报告.md
     ├── ESP32-C5 移植指南.md
     ├── 瑞萨 RZV2H 移植计划.md
-    ├── 瑞萨 RZV2H 移植计划（已验证版）.md
-    ├── 采购方案.md
     └── triage-ui/
         └── triage.html                ← 分诊仪表盘
 ```
@@ -153,8 +151,10 @@ ESP32-C5 ×3              RZ/V2H                    7" 触屏 / Web
 | `docs/竞赛差距分析.md` | 竞赛需求 vs 项目现有能力对比 |
 | `docs/竞赛准备清单.md` | PPT/视频/展板等竞赛材料清单 |
 | `docs/ML架构详解.md` | DensePose 模型架构 + 训练 + 推理 |
-| `docs/ESP32-C5 移植审计报告.md` | 39 处修改的完整审计 |
-| `docs/采购方案.md` | 硬件 BOM + 价格 + 采购渠道 |
+| `docs/ESP32-C5 移植审计报告.md` | C5 移植 39 处修改审计 |
+| `docs/瑞萨 RZV2H 移植计划.md` | RZ/V2H 主控移植计划 |
+| `docs/端侧LLM方案设计.md` | 端侧 LLM 伤病报告方案 |
+| `docs/目录审计报告.md` | 目录完整性审计 |
 
 ---
 

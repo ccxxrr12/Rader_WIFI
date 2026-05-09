@@ -118,17 +118,13 @@ ruvector-crv = "0.1.1"
 ruvector-gnn = { version = "2.0.5", default-features = false }
 
 
-# Internal crates
+# Internal crates (only competition-active crates)
 wifi-densepose-core = { version = "0.3.0", path = "crates/wifi-densepose-core" }
 wifi-densepose-signal = { version = "0.3.0", path = "crates/wifi-densepose-signal" }
 wifi-densepose-nn = { version = "0.3.0", path = "crates/wifi-densepose-nn" }
-wifi-densepose-api = { version = "0.3.0", path = "crates/wifi-densepose-api" }
-wifi-densepose-db = { version = "0.3.0", path = "crates/wifi-densepose-db" }
 wifi-densepose-config = { version = "0.3.0", path = "crates/wifi-densepose-config" }
 wifi-densepose-hardware = { version = "0.3.0", path = "crates/wifi-densepose-hardware" }
-wifi-densepose-wasm = { version = "0.3.0", path = "crates/wifi-densepose-wasm" }
 wifi-densepose-mat = { version = "0.3.0", path = "crates/wifi-densepose-mat" }
-wifi-densepose-ruvector = { version = "0.3.0", path = "crates/wifi-densepose-ruvector" }
 
 [profile.release]
 lto = true

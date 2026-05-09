@@ -41,7 +41,7 @@ cd /opt/ruview
 ./deploy.sh
 
 # 3. 浏览器打开仪表盘
-# http://192.168.1.1:8080/triage.html
+# http://192.168.1.1:8080/ui/triage.html
 ```
 
 ---
@@ -59,9 +59,9 @@ ESP32-C5 ×3          RZ/V2H               7" 触屏 / Web
   │                    │                     │
   ├─ UDP 5005 ────────►├─ Rust Signal Pipe   │
   │                    │  · 呼吸率/心率       │
-  │                    │  · START 分诊        │
-  │                    │  · 人员定位          │
-  │                    │  · 伤员追踪          │
+  │                    │  · TriageEngine      │
+  │                    │    START 分诊        │
+  │                    │  · 伤员追踪+告警     │
   │                    │                     │
   │                    ├─ WebSocket 8765 ────►├─ Triage Dashboard
   │                    │                     │  · 伤员地图
@@ -77,7 +77,6 @@ ESP32-C5 ×3          RZ/V2H               7" 触屏 / Web
 ## 目录
 
 ```
-π-RuView-Competition/
 ├── firmware/esp32-c5-csi-node/   # C5 CSI 固件
 ├── rust-server/crates/           # Rust 服务端
 │   ├── wifi-densepose-core/      # 基础类型
@@ -86,13 +85,23 @@ ESP32-C5 ×3          RZ/V2H               7" 触屏 / Web
 │   ├── wifi-densepose-hardware/  # CSI 帧解析
 │   ├── wifi-densepose-nn/        # ONNX 推理 (可选)
 │   ├── wifi-densepose-mat/       # 分诊系统 ⭐
-│   └── wifi-densepose-sensing-server/  # 主服务
-├── competition/
-│   ├── triage-ui/                # 分诊仪表盘 ⭐
-│   ├── deploy.sh                 # 一键部署
-│   ├── design-report/            # 竞赛设计报告
-│   └── PROGRESS.md               # 构建进度
-└── ui/                           # 3D Web 可视化
+│   └── wifi-densepose-sensing-server/  # 主服务 (含MAT集成)
+├── docs/                         # 竞赛文档
+│   ├── triage-ui/triage.html     # 分诊仪表盘 ⭐
+│   ├── PROGRESS.md               # 构建进度
+│   ├── README_COMPETITION.md     # 竞赛 README
+│   ├── 竞赛改造方案.md            # 完整改造计划
+│   ├── 竞赛差距分析.md            # 需求差距分析
+│   ├── 竞赛准备清单.md            # 准备清单
+│   ├── ML架构详解.md              # ML 架构
+│   ├── 端侧LLM方案设计.md         # LLM 方案设计
+│   ├── ESP32-C5 移植指南.md       # C5 移植指南
+│   ├── ESP32-C5 移植审计报告.md   # C5 审计报告
+│   ├── 瑞萨 RZV2H 移植计划.md     # RZ/V2H 移植
+│   └── 目录审计报告.md            # 目录审计
+├── ui/                           # 3D Web 可视化
+├── scripts/provision.py          # C5 烧录脚本
+└── deploy.sh                     # 一键部署
 ```
 
 ---
@@ -120,8 +129,11 @@ ESP32-C5 ×3          RZ/V2H               7" 触屏 / Web
 
 | 文档 | 说明 |
 |------|------|
-| `competition/竞赛改造方案.md` | 完整改造计划 |
-| `competition/ML架构详解.md` | 机器学习架构 |
-| `competition/竞赛差距分析.md` | 需求差距分析 |
-| `competition/ESP32-C5 移植审计报告.md` | C5 移植审计 |
-| `competition/PROGRESS.md` | 构建进度追踪 |
+| `docs/竞赛改造方案.md` | 完整改造计划 |
+| `docs/ML架构详解.md` | 机器学习架构 |
+| `docs/竞赛差距分析.md` | 需求差距分析 |
+| `docs/竞赛准备清单.md` | 竞赛准备清单 |
+| `docs/ESP32-C5 移植审计报告.md` | C5 移植审计 |
+| `docs/PROGRESS.md` | 构建进度追踪 |
+| `docs/端侧LLM方案设计.md` | 端侧 LLM 方案 |
+| `docs/瑞萨 RZV2H 移植计划.md` | RZ/V2H 移植计划 |

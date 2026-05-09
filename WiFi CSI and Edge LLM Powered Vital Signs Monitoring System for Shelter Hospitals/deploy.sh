@@ -21,7 +21,7 @@ HTTP_PORT=8080
 WS_PORT=8765
 UDP_PORT=5005
 SENSING_BIN="./target/aarch64-unknown-linux-gnu/release/sensing-server"
-TRIAGE_UI="./competition/triage-ui/triage.html"
+TRIAGE_UI="./docs/triage-ui/triage.html"
 UI_DIR="./ui"
 
 # ── 1. 环境检查 ──────────────────────────────────

@@ -96,27 +96,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#e0e0e
 </div>
 
 <script>
-// ── START 分诊规则 (标准 START 协议) ──
-function calcTriage(br, hr, motion, sq) {
-  if (sq < 0.05) return {level:'Unknown',color:'gray',priority:5};
-  const noBr = (br === null || br === undefined || br <= 0);
-  const noHr = (hr === null || hr === undefined || hr <= 0);
-  if (noBr && noHr) return {level:'Deceased',color:'black',priority:4};
-  if (br > 30 || (br > 0 && br < 10)) return {level:'Immediate',color:'red',priority:1};
-  if (hr > 120 || (hr > 0 && hr < 40)) return {level:'Immediate',color:'red',priority:1};
-  if (br >= 12 && br <= 20 && hr >= 60 && hr <= 100) return {level:'Minor',color:'green',priority:3};
-  if (br >= 12 && br <= 24 && hr >= 50 && hr <= 100 && motion > 0.3) return {level:'Minor',color:'green',priority:3};
-  return {level:'Delayed',color:'yellow',priority:2};
-}
-
 // ── 全局状态 ──
 const NODES = [{id:1,x:400,y:150,l:'C5 #1'},{id:2,x:150,y:400,l:'C5 #2'},{id:3,x:650,y:400,l:'C5 #3'}];
 const W=800,H=520,M=40;
-let survivors = {};
-let alerts = [];
-let survivorSeq = 0;
+let latestTriage = null;   // 服务端 TriageUpdate
+let latestVitals = null;   // 原始 SensingUpdate (备用)
 let skelOn = false;
-let lastVitals = null;
 
 // ── Canvas ──
 const cv = document.getElementById('map');
@@ -124,9 +109,11 @@ const cx = cv.getContext('2d');
 
 function draw() {
   cx.clearRect(0,0,W,H);
+  // 网格
   cx.strokeStyle='#1a2332'; cx.lineWidth=1;
   for(let x=0;x<W;x+=40){cx.beginPath();cx.moveTo(x,0);cx.lineTo(x,H);cx.stroke()}
   for(let y=0;y<H;y+=40){cx.beginPath();cx.moveTo(0,y);cx.lineTo(W,y);cx.stroke()}
+  // 边框
   cx.strokeStyle='#2a3040'; cx.lineWidth=2;
   cx.strokeRect(M,M,W-2*M,H-2*M);
   cx.fillStyle='#555'; cx.font='11px monospace';
@@ -139,98 +126,142 @@ function draw() {
     cx.fillStyle='#4fc3f7';cx.fill();cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();
     cx.fillStyle='#4fc3f7';cx.font='11px sans-serif';cx.fillText(n.l,n.x-18,n.y-14);
   });
-  // 伤员
-  Object.values(survivors).forEach(s=>{
-    const px = M + (s.x+2)/4*(W-2*M); const py = M + (s.y+1.5)/3*(H-2*M);
-    const cx2=Math.max(M,Math.min(W-M,px)), cy2=Math.max(M,Math.min(H-M,py));
-    if(s.triage==='Immediate'||s.deteriorating){
-      cx.beginPath();cx.arc(cx2,cy2,25,0,Math.PI*2);cx.fillStyle=s.color+'22';cx.fill();
-    }
-    cx.beginPath();cx.arc(cx2,cy2,12,0,Math.PI*2);
-    cx.fillStyle=s.color;cx.fill();cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();
-    cx.fillStyle='#fff';cx.font='bold 10px monospace';cx.textAlign='center';
-    cx.fillText(s.id.substring(0,8),cx2,cy2-18);
-    if(s.br!==null){cx.font='9px sans-serif';cx.fillStyle='#4fc3f7';cx.fillText(s.br.toFixed(0)+'/min',cx2,cy2+22)}
-  });
+  // 伤员 (来自服务端 TriageUpdate)
+  if(latestTriage&&latestTriage.survivors){
+    latestTriage.survivors.forEach(s=>{
+      const px = s.position ? M + (s.position[0]+2)/4*(W-2*M) : W/2;
+      const py = s.position ? M + (s.position[1]+1.5)/3*(H-2*M) : H/2;
+      const cx2=Math.max(M,Math.min(W-M,px)), cy2=Math.max(M,Math.min(H-M,py));
+      // 恶化动画环
+      if(s.triage_color==='red'||s.is_deteriorating){
+        cx.beginPath();cx.arc(cx2,cy2,25,0,Math.PI*2);cx.fillStyle=s.triage_color+'22';cx.fill();
+      }
+      // 圆点
+      cx.beginPath();cx.arc(cx2,cy2,12,0,Math.PI*2);
+      cx.fillStyle=s.triage_color;cx.fill();cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();
+      // 标签
+      cx.fillStyle='#fff';cx.font='bold 10px monospace';cx.textAlign='center';
+      cx.fillText(s.id.substring(0,8),cx2,cy2-18);
+      if(s.breathing_rate!==null&&s.breathing_rate!==undefined){
+        cx.font='9px sans-serif';cx.fillStyle='#4fc3f7';
+        cx.fillText(s.breathing_rate.toFixed(0)+'/min',cx2,cy2+22);
+      }
+    });
+  }
 }
 
-// ── 伤员匹配 (基于 NodeID 的简易聚类) ──
-function matchSurvivor(nodeId, now) {
-  // 清理超时
-  Object.keys(survivors).forEach(id=>{if(now-survivors[id].lastSeen>30)delete survivors[id]});
-  // 匹配 (同一节点 5秒内)
-  for(const[id,s]of Object.entries(survivors)){if(s.nodeId===nodeId&&now-s.lastSeen<5)return id}
-  // 新建
-  survivorSeq++;
-  const nid = 'SURV-'+survivorSeq.toString(16).padStart(4,'0');
-  survivors[nid] = {id:nid,nodeId,br:null,hr:null,motion:0,x:0,y:0,triage:'Unknown',color:'gray',
+// ── 处理 WebSocket 消息 ──
+function handleUpdate(data) {
+  latestVitals = data;
+
+  // 优先消费服务端 MAT TriageUpdate
+  if(data.triage_update){
+    latestTriage = data.triage_update;
+    renderFromServer();
+    return;
+  }
+
+  // 备用: 服务端未发送 triage_update (旧版服务器/模拟无MAT)
+  // 使用 JS 端简易 START 规则从 raw vital_signs 计算
+  if(data.nodes&&data.nodes.length&&data.vital_signs){
+    renderFromLocal(data);
+  }
+}
+
+// ── 渲染 (服务端 MAT 数据) ──
+function renderFromServer(){
+  const t = latestTriage;
+  if(!t) return;
+
+  // 统计栏
+  const a = t.assessment;
+  document.getElementById('stt').textContent = a.total;
+  document.getElementById('st1').textContent = a.immediate;
+  document.getElementById('st2').textContent = a.delayed;
+  document.getElementById('st3').textContent = a.minor;
+  document.getElementById('st4').textContent = a.deceased;
+  document.getElementById('assessment').innerHTML =
+    `伤情: <strong style="color:#ff9800">${a.severity}</strong> | 需救援人员: <strong>${a.rescuer_estimate}</strong>人`;
+
+  // 伤员卡片
+  const list = document.getElementById('slist');
+  if(!t.survivors||!t.survivors.length){
+    list.innerHTML = '<p style="color:#666;font-size:.8em">未检测到伤员</p>';
+  } else {
+    list.innerHTML = t.survivors.map(s=>`
+    <div class="survivor-card ${s.triage_color}">
+      <div class="id">${s.id.substring(0,8)} · ${s.tracked_seconds.toFixed(0)}s · 节点${s.node_id} · ${s.estimated_age}</div>
+      <div class="vital"><span>呼吸: <strong>${s.breathing_rate?.toFixed(1)??'--'}</strong>/min</span><span>心率: <strong>${s.heart_rate?.toFixed(0)??'--'}</strong>BPM</span></div>
+      <span class="triage-badge ${s.triage_color}">${s.triage}</span>${s.is_deteriorating?'<span class="deteriorating"> ⚠ 恶化</span>':''}</div>`).join('');
+  }
+
+  // 告警
+  const al = document.getElementById('alist');
+  if(!t.alerts||!t.alerts.length){
+    al.innerHTML = '<p style="color:#666;font-size:.75em">暂无</p>';
+  } else {
+    al.innerHTML = t.alerts.slice(0,20).map(a=>
+      `<div class="alert-item prio${a.priority}"><span class="time">${a.time}</span> ${a.survivor_id.substring(0,8)}: ${a.message}</div>`
+    ).join('');
+  }
+
+  draw();
+}
+
+// ── 备用渲染 (本地 JS 计算, 无服务端 MAT 时使用) ──
+let localSurvivors = {};
+let localAlerts = [];
+let localSeq = 0;
+
+function calcTriageLocal(br, hr, motion, sq) {
+  if (sq < 0.05) return {level:'Unknown',color:'gray',priority:5};
+  const noBr = (br === null || br === undefined || br <= 0);
+  const noHr = (hr === null || hr === undefined || hr <= 0);
+  if (noBr && noHr) return {level:'Deceased',color:'black',priority:4};
+  if (br > 30 || (br > 0 && br < 10)) return {level:'Immediate',color:'red',priority:1};
+  if (hr > 120 || (hr > 0 && hr < 40)) return {level:'Immediate',color:'red',priority:1};
+  if (br >= 12 && br <= 20 && hr >= 60 && hr <= 100) return {level:'Minor',color:'green',priority:3};
+  if (br >= 12 && br <= 24 && hr >= 50 && hr <= 100 && motion > 0.3) return {level:'Minor',color:'green',priority:3};
+  return {level:'Delayed',color:'yellow',priority:2};
+}
+
+function matchSurvivorLocal(nodeId, now) {
+  Object.keys(localSurvivors).forEach(id=>{if(now-localSurvivors[id].lastSeen>30)delete localSurvivors[id]});
+  for(const[id,s]of Object.entries(localSurvivors)){if(s.nodeId===nodeId&&now-s.lastSeen<5)return id}
+  localSeq++;
+  const nid = 'SURV-'+localSeq.toString(16).padStart(4,'0');
+  localSurvivors[nid] = {id:nid,nodeId,br:null,hr:null,motion:0,x:0,y:0,triage:'Unknown',color:'gray',
     priority:5,firstSeen:now,lastSeen:now,deteriorating:false,status:'active',brHist:[],hrHist:[]};
   return nid;
 }
 
-// ── 处理 SensingUpdate ──
-function handleUpdate(data) {
+function renderFromLocal(data) {
   const now = Date.now()/1000;
-  lastVitals = data;
-  if(!data.nodes||!data.nodes.length) return;
-
   data.nodes.forEach(node => {
-    const sid = matchSurvivor(node.node_id, now);
-    const s = survivors[sid];
-    s.lastSeen = now;
-    s.nodeId = node.node_id;
-
-    // 生命体征 (来自服务器 VitalSigns)
-    if(data.vital_signs){
-      s.br = data.vital_signs.breathing_rate_bpm;
-      s.hr = data.vital_signs.heart_rate_bpm;
-    }
+    const sid = matchSurvivorLocal(node.node_id, now);
+    const s = localSurvivors[sid];
+    s.lastSeen = now; s.nodeId = node.node_id;
+    if(data.vital_signs){ s.br = data.vital_signs.breathing_rate_bpm; s.hr = data.vital_signs.heart_rate_bpm; }
     s.motion = data.classification?.motion_level==='high'?0.8:data.classification?.motion_level==='medium'?0.4:0.1;
-
-    // 平滑
     if(s.br!==null&&s.br!==undefined){s.brHist.push(s.br);if(s.brHist.length>20)s.brHist.shift()}
     if(s.hr!==null&&s.hr!==undefined){s.hrHist.push(s.hr);if(s.hrHist.length>20)s.hrHist.shift()}
     const smBr = s.brHist.length?avg(s.brHist.slice(-5)):null;
     const smHr = s.hrHist.length?avg(s.hrHist.slice(-5)):null;
-    const sq = data.vital_signs?.signal_quality||(data.features?.mean_rssi?Math.min(1,Math.max(0,(data.features.mean_rssi+90)/60)):0.5);
-
-    // 分诊
+    const sq = data.vital_signs?.signal_quality||0.5;
     const prev = s.triage;
-    s.triage = calcTriage(smBr, smHr, s.motion, sq).level;
-    s.color = calcTriage(smBr, smHr, s.motion, sq).color;
-    s.priority = calcTriage(smBr, smHr, s.motion, sq).priority;
-
-    // 位置 (基于节点位置 + RSSI)
+    const tri = calcTriageLocal(smBr, smHr, s.motion, sq);
+    s.triage = tri.level; s.color = tri.color; s.priority = tri.priority;
     const nn = NODES.find(n=>n.id===node.node_id);
-    if(nn){
-      const d = rssiDist(node.rssi_dbm);
-      s.x = (nn.x-M)/W*4-2 + d*0.5; s.y = (nn.y-M)/H*3-1.5 + d*0.3;
-    }
-
-    // 恶化检测
-    if(prev!=='Unknown'&&s.triage!=='Unknown'&&calcTriage(smBr,smHr,s.motion,sq).priority<calcTriage(smBr||0,smHr||0,0,sq).priority){
+    if(nn){ const d = rssiDist(node.rssi_dbm); s.x = (nn.x-M)/W*4-2 + d*0.5; s.y = (nn.y-M)/H*3-1.5 + d*0.3; }
+    if(prev!=='Unknown'&&s.triage!=='Unknown'&&tri.priority<calcTriageLocal(smBr||0,smHr||0,0,sq).priority){
       s.deteriorating=true;
-      alerts.unshift({time:new Date().toLocaleTimeString(),id:sid.substring(0,8),
-        msg:`分诊恶化: ${prev} → ${s.triage}`,priority:s.priority});
-    }else{s.deteriorating=false}
+      localAlerts.unshift({time:new Date().toLocaleTimeString(),id:sid.substring(0,8),msg:`分诊恶化: ${prev} → ${s.triage}`,priority:s.priority});
+    } else { s.deteriorating=false; }
   });
 
-  // 多人检测
-  if(data.persons){
-    data.persons.forEach(p=>{
-      const sid = matchSurvivor(data.nodes[0]?.node_id||1, now);
-      const s = survivors[sid];
-      if(p.keypoints){s.x=p.keypoints[0]?.x||s.x;s.y=p.keypoints[0]?.y||s.y}
-    });
-  }
-
-  render();
-}
-
-function render(){
-  //统计
+  // 统计
   const counts={total:0,Immediate:0,Delayed:0,Minor:0,Deceased:0,Unknown:0};
-  Object.values(survivors).forEach(s=>{counts.total++;counts[s.triage]=(counts[s.triage]||0)+1});
+  Object.values(localSurvivors).forEach(s=>{counts.total++;counts[s.triage]=(counts[s.triage]||0)+1});
   document.getElementById('stt').textContent=counts.total;
   document.getElementById('st1').textContent=counts.Immediate||0;
   document.getElementById('st2').textContent=counts.Delayed||0;
@@ -239,33 +270,36 @@ function render(){
   const sev = counts.Immediate>=3?'Critical':counts.Immediate>=1?'Major':counts.Delayed>=1?'Moderate':'Minimal';
   const resc = (counts.Immediate||0)*4+(counts.Delayed||0)*2+(counts.Minor||0)/2;
   document.getElementById('assessment').innerHTML =
-    `伤情: <strong style="color:#ff9800">${sev}</strong> | 需救援人员: <strong>${resc}</strong>人`;
+    `伤情: <strong style="color:#ff9800">${sev}</strong> | 需救援人员: <strong>${resc}</strong>人 (本地计算)`;
 
-  //伤员卡片
+  // 卡片
   const list=document.getElementById('slist');
-  if(!Object.keys(survivors).length){list.innerHTML='<p style="color:#666;font-size:.8em">未检测到伤员</p>';}
-  else{list.innerHTML=Object.values(survivors).map(s=>`
+  if(!Object.keys(localSurvivors).length){list.innerHTML='<p style="color:#666;font-size:.8em">未检测到伤员</p>';}
+  else{list.innerHTML=Object.values(localSurvivors).map(s=>`
     <div class="survivor-card ${s.color}">
       <div class="id">${s.id.substring(0,8)} · ${((Date.now()/1000)-s.firstSeen).toFixed(0)}s · 节点${s.nodeId}</div>
       <div class="vital"><span>呼吸: <strong>${s.br?.toFixed(1)??'--'}</strong>/min</span><span>心率: <strong>${s.hr?.toFixed(0)??'--'}</strong>BPM</span></div>
       <span class="triage-badge ${s.color}">${s.triage}</span>${s.deteriorating?'<span class="deteriorating"> ⚠ 恶化</span>':''}</div>`).join('')}
 
-  //告警
+  // 告警
   const al=document.getElementById('alist');
-  if(!alerts.length){al.innerHTML='<p style="color:#666;font-size:.75em">暂无</p>'}
-  else{al.innerHTML=alerts.slice(0,20).map(a=>`<div class="alert-item prio${a.priority}"><span class="time">${a.time}</span> ${a.id}: ${a.msg}</div>`).join('')}
+  if(!localAlerts.length){al.innerHTML='<p style="color:#666;font-size:.75em">暂无</p>'}
+  else{al.innerHTML=localAlerts.slice(0,20).map(a=>`<div class="alert-item prio${a.priority}"><span class="time">${a.time}</span> ${a.id}: ${a.msg}</div>`).join('')}
 
   draw();
 }
 
+// ── 工具函数 ──
 function rssiDist(r){const ref=-30,n=3.0;return Math.pow(10,(ref-Math.max(-90,r))/(10*n))}
 function avg(a){return a.reduce((x,y)=>x+y,0)/a.length}
 
-// ── WebSocket (连接服务器现有 /ws/sensing) ──
+// ── WebSocket ──
 let ws;
 function connect(){
   ws=new WebSocket(`ws://${location.host}/ws/sensing`);
-  ws.onopen=()=>{document.getElementById('sd').className='dot online';document.getElementById('st').textContent='已连接'};
+  ws.onopen=()=>{document.getElementById('sd').className='dot online';document.getElementById('st').textContent='已连接';
+    latestTriage=null; localSurvivors={}; localAlerts=[]; localSeq=0;
+  };
   ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==='sensing_update')handleUpdate(d)}catch(e){}}
   ws.onclose=()=>{document.getElementById('sd').className='dot offline';document.getElementById('st').textContent='断开·5s重连';setTimeout(connect,5000)};
   ws.onerror=()=>ws.close();
