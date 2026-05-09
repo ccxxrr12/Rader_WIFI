@@ -329,7 +329,7 @@ impl TriageEngine {
 
     fn match_or_create(&mut self, input: &VitalSignsInput, now: f64) -> String {
         // 已有伤员: person_id 匹配
-        if let Some(pid) = input.person_id {
+        if let Some(_pid) = input.person_id {
             for (id, s) in &self.survivors {
                 if s.node_id == input.node_id && s.last_updated > now - 5.0 {
                     return id.clone();
@@ -369,7 +369,7 @@ impl TriageEngine {
                 is_deteriorating: s.deterioration_count > 0,
                 tracked_seconds: now - s.first_seen,
                 node_id: s.node_id,
-                estimated_age: estimate_age(s.breathing_rate, s.heart_rate),
+                estimated_age: estimate_age(average_last(&s.breathing_history, 3), average_last(&s.heart_rate_history, 3)),
                 status: s.status.to_string(),
             }
         }).collect();

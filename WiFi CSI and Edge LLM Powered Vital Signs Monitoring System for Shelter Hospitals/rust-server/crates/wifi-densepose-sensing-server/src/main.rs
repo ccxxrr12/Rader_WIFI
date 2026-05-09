@@ -12,6 +12,7 @@ mod adaptive_classifier;
 mod rvf_container;
 mod rvf_pipeline;
 mod vital_signs;
+mod mat_pipeline;
 
 // Training pipeline modules (exposed via lib.rs)
 use wifi_densepose_sensing_server::{graph_transformer, trainer, dataset, embedding};
@@ -46,11 +47,8 @@ use rvf_container::{RvfBuilder, RvfContainerInfo, RvfReader, VitalSignConfig};
 use rvf_pipeline::ProgressiveLoader;
 use vital_signs::{VitalSignDetector, VitalSigns};
 
-// ADR-022 Phase 3: Multi-BSSID pipeline integration
-use wifi_densepose_wifiscan::{
-    BssidRegistry, WindowsWifiPipeline,
-};
-use wifi_densepose_wifiscan::parse_netsh_output as parse_netsh_bssid_output;
+// MAT triage pipeline (competition core)
+use mat_pipeline::{TriageEngine, TriageConfig, VitalSignsInput};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -179,25 +177,9 @@ struct SensingUpdate {
     /// Vital sign estimates (breathing rate, heart rate, confidence).
     #[serde(skip_serializing_if = "Option::is_none")]
     vital_signs: Option<VitalSigns>,
-    // ── ADR-022 Phase 3: Enhanced multi-BSSID pipeline fields ──
-    /// Enhanced motion estimate from multi-BSSID pipeline.
+    /// MAT triage update (START triage + survivor tracking + alerts).
     #[serde(skip_serializing_if = "Option::is_none")]
-    enhanced_motion: Option<serde_json::Value>,
-    /// Enhanced breathing estimate from multi-BSSID pipeline.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    enhanced_breathing: Option<serde_json::Value>,
-    /// Posture classification from BSSID fingerprint matching.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    posture: Option<String>,
-    /// Signal quality score from multi-BSSID quality gate [0.0, 1.0].
-    #[serde(skip_serializing_if = "Option::is_none")]
-    signal_quality_score: Option<f64>,
-    /// Quality gate verdict: "Permit", "Warn", or "Deny".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    quality_verdict: Option<String>,
-    /// Number of BSSIDs used in the enhanced sensing cycle.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bssid_count: Option<usize>,
+    triage_update: Option<mat_pipeline::TriageUpdate>,
     // ── ADR-023 Phase 7-8: Model inference fields ──
     /// Pose keypoints when a trained model is loaded (x, y, z, confidence).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,6 +274,8 @@ struct AppStateInner {
     start_time: std::time::Instant,
     /// Vital sign detector (processes CSI frames to estimate HR/RR).
     vital_detector: VitalSignDetector,
+    /// MAT triage engine (START triage + survivor tracking + alerts).
+    triage_engine: TriageEngine,
     /// Most recent vital sign reading for the REST endpoint.
     latest_vitals: VitalSigns,
     /// RVF container info if a model was loaded via `--load-rvf`.
@@ -1078,398 +1062,6 @@ fn trimmed_mean(buf: &VecDeque<f64>) -> f64 {
         sorted[n / 2] // fallback to median if too few samples
     } else {
         middle.iter().sum::<f64>() / middle.len() as f64
-    }
-}
-
-// ── Windows WiFi RSSI collector ──────────────────────────────────────────────
-
-/// Parse `netsh wlan show interfaces` output for RSSI and signal quality
-fn parse_netsh_interfaces_output(output: &str) -> Option<(f64, f64, String)> {
-    let mut rssi = None;
-    let mut signal = None;
-    let mut ssid = None;
-
-    for line in output.lines() {
-        let line = line.trim();
-        if line.starts_with("Signal") {
-            // "Signal                 : 89%"
-            if let Some(pct) = line.split(':').nth(1) {
-                let pct = pct.trim().trim_end_matches('%');
-                if let Ok(v) = pct.parse::<f64>() {
-                    signal = Some(v);
-                    // Convert signal% to approximate dBm: -100 + (signal% * 0.6)
-                    rssi = Some(-100.0 + v * 0.6);
-                }
-            }
-        }
-        if line.starts_with("SSID") && !line.starts_with("BSSID") {
-            if let Some(s) = line.split(':').nth(1) {
-                ssid = Some(s.trim().to_string());
-            }
-        }
-    }
-
-    match (rssi, signal, ssid) {
-        (Some(r), Some(_s), Some(name)) => Some((r, _s, name)),
-        (Some(r), Some(_s), None) => Some((r, _s, "Unknown".into())),
-        _ => None,
-    }
-}
-
-async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
-    let mut interval = tokio::time::interval(Duration::from_millis(tick_ms));
-    let mut seq: u32 = 0;
-
-    // ADR-022 Phase 3: Multi-BSSID pipeline state (kept across ticks)
-    let mut registry = BssidRegistry::new(32, 30);
-    let mut pipeline = WindowsWifiPipeline::new();
-
-    info!(
-        "Windows WiFi multi-BSSID pipeline active (tick={}ms, max_bssids=32)",
-        tick_ms
-    );
-
-    loop {
-        interval.tick().await;
-        seq += 1;
-
-        // ── Step 1: Run multi-BSSID scan via spawn_blocking ──────────
-        // NetshBssidScanner is not Send, so we run `netsh` and parse
-        // the output inside a blocking closure.
-        let bssid_scan_result = tokio::task::spawn_blocking(|| {
-            let output = std::process::Command::new("netsh")
-                .args(["wlan", "show", "networks", "mode=bssid"])
-                .output()
-                .map_err(|e| format!("netsh bssid scan failed: {e}"))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "netsh exited with {}: {}",
-                    output.status,
-                    stderr.trim()
-                ));
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            parse_netsh_bssid_output(&stdout).map_err(|e| format!("parse error: {e}"))
-        })
-        .await;
-
-        // Unwrap the JoinHandle result, then the inner Result.
-        let observations = match bssid_scan_result {
-            Ok(Ok(obs)) if !obs.is_empty() => obs,
-            Ok(Ok(_empty)) => {
-                debug!("Multi-BSSID scan returned 0 observations, falling back");
-                windows_wifi_fallback_tick(&state, seq).await;
-                continue;
-            }
-            Ok(Err(e)) => {
-                warn!("Multi-BSSID scan error: {e}, falling back");
-                windows_wifi_fallback_tick(&state, seq).await;
-                continue;
-            }
-            Err(join_err) => {
-                error!("spawn_blocking panicked: {join_err}");
-                continue;
-            }
-        };
-
-        let obs_count = observations.len();
-
-        // Derive SSID from the first observation for the source label.
-        let ssid = observations
-            .first()
-            .map(|o| o.ssid.clone())
-            .unwrap_or_else(|| "Unknown".into());
-
-        // ── Step 2: Feed observations into registry ──────────────────
-        registry.update(&observations);
-        let multi_ap_frame = registry.to_multi_ap_frame();
-
-        // ── Step 3: Run enhanced pipeline ────────────────────────────
-        let enhanced = pipeline.process(&multi_ap_frame);
-
-        // ── Step 4: Build backward-compatible Esp32Frame ─────────────
-        let first_rssi = observations
-            .first()
-            .map(|o| o.rssi_dbm)
-            .unwrap_or(-80.0);
-        let _first_signal_pct = observations
-            .first()
-            .map(|o| o.signal_pct)
-            .unwrap_or(40.0);
-
-        let frame = Esp32Frame {
-            magic: 0xC511_0001,
-            node_id: 0,
-            n_antennas: 1,
-            n_subcarriers: obs_count.min(u16::MAX as usize) as u16,
-            freq_mhz: 2437u32,
-            sequence: seq,
-            rssi: first_rssi.clamp(-128.0, 127.0) as i8,
-            noise_floor: -90,
-            amplitudes: multi_ap_frame.amplitudes.clone(),
-            phases: multi_ap_frame.phases.clone(),
-        };
-
-        // ── Step 4b: Update frame history and extract features ───────
-        let mut s_write_pre = state.write().await;
-        s_write_pre.frame_history.push_back(frame.amplitudes.clone());
-        if s_write_pre.frame_history.len() > FRAME_HISTORY_CAPACITY {
-            s_write_pre.frame_history.pop_front();
-        }
-        let sample_rate_hz = 1000.0 / tick_ms as f64;
-        let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-            extract_features_from_frame(&frame, &s_write_pre.frame_history, sample_rate_hz);
-        smooth_and_classify(&mut s_write_pre, &mut classification, raw_motion);
-        adaptive_override(&s_write_pre, &features, &mut classification);
-        drop(s_write_pre);
-
-        // ── Step 5: Build enhanced fields from pipeline result ───────
-        let enhanced_motion = Some(serde_json::json!({
-            "score": enhanced.motion.score,
-            "level": format!("{:?}", enhanced.motion.level),
-            "contributing_bssids": enhanced.motion.contributing_bssids,
-        }));
-
-        let enhanced_breathing = enhanced.breathing.as_ref().map(|b| {
-            serde_json::json!({
-                "rate_bpm": b.rate_bpm,
-                "confidence": b.confidence,
-                "bssid_count": b.bssid_count,
-            })
-        });
-
-        let posture_str = enhanced.posture.map(|p| format!("{p:?}"));
-        let sig_quality_score = Some(enhanced.signal_quality.score);
-        let verdict_str = Some(format!("{:?}", enhanced.verdict));
-        let bssid_n = Some(enhanced.bssid_count);
-
-        // ── Step 6: Update shared state ──────────────────────────────
-        let mut s = state.write().await;
-        s.source = format!("wifi:{ssid}");
-        s.rssi_history.push_back(first_rssi);
-        if s.rssi_history.len() > 60 {
-            s.rssi_history.pop_front();
-        }
-
-        s.tick += 1;
-        let tick = s.tick;
-
-        let motion_score = if classification.motion_level == "active" {
-            0.8
-        } else if classification.motion_level == "present_still" {
-            0.3
-        } else {
-            0.05
-        };
-
-        let raw_vitals = s.vital_detector.process_frame(&frame.amplitudes, &frame.phases);
-        let vitals = smooth_vitals(&mut s, &raw_vitals);
-        s.latest_vitals = vitals.clone();
-
-        let feat_variance = features.variance;
-
-        // Multi-person estimation with temporal smoothing (EMA α=0.10).
-        let raw_score = compute_person_score(&features);
-        s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
-        let est_persons = if classification.presence {
-            let count = score_to_person_count(s.smoothed_person_score, s.prev_person_count);
-            s.prev_person_count = count;
-            count
-        } else {
-            s.prev_person_count = 0;
-            0
-        };
-
-        let mut update = SensingUpdate {
-            msg_type: "sensing_update".to_string(),
-            timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
-            source: format!("wifi:{ssid}"),
-            tick,
-            nodes: vec![NodeInfo {
-                node_id: 0,
-                rssi_dbm: first_rssi,
-                position: [0.0, 0.0, 0.0],
-                amplitude: multi_ap_frame.amplitudes,
-                subcarrier_count: obs_count,
-            }],
-            features,
-            classification,
-            signal_field: generate_signal_field(
-                first_rssi, motion_score, breathing_rate_hz,
-                feat_variance.min(1.0), &sub_variances,
-            ),
-            vital_signs: Some(vitals),
-            enhanced_motion,
-            enhanced_breathing,
-            posture: posture_str,
-            signal_quality_score: sig_quality_score,
-            quality_verdict: verdict_str,
-            bssid_count: bssid_n,
-            pose_keypoints: None,
-            model_status: None,
-            persons: None,
-            estimated_persons: if est_persons > 0 { Some(est_persons) } else { None },
-        };
-
-        // Populate persons from the sensing update.
-        let persons = derive_pose_from_sensing(&update);
-        if !persons.is_empty() {
-            update.persons = Some(persons);
-        }
-
-        if let Ok(json) = serde_json::to_string(&update) {
-            let _ = s.tx.send(json);
-        }
-        s.latest_update = Some(update);
-
-        debug!(
-            "Multi-BSSID tick #{tick}: {obs_count} BSSIDs, quality={:.2}, verdict={:?}",
-            enhanced.signal_quality.score, enhanced.verdict
-        );
-    }
-}
-
-/// Fallback: single-RSSI collection via `netsh wlan show interfaces`.
-///
-/// Used when the multi-BSSID scan fails or returns 0 observations.
-async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
-    let output = match tokio::process::Command::new("netsh")
-        .args(["wlan", "show", "interfaces"])
-        .output()
-        .await
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(e) => {
-            warn!("netsh interfaces fallback failed: {e}");
-            return;
-        }
-    };
-
-    let (rssi_dbm, signal_pct, ssid) = match parse_netsh_interfaces_output(&output) {
-        Some(v) => v,
-        None => {
-            debug!("Fallback: no WiFi interface connected");
-            return;
-        }
-    };
-
-    let frame = Esp32Frame {
-        magic: 0xC511_0001,
-        node_id: 0,
-        n_antennas: 1,
-        n_subcarriers: 1,
-        freq_mhz: 2437u32,
-        sequence: seq,
-        rssi: rssi_dbm as i8,
-        noise_floor: -90,
-        amplitudes: vec![signal_pct],
-        phases: vec![0.0],
-    };
-
-    let mut s = state.write().await;
-    // Update frame history before extracting features.
-    s.frame_history.push_back(frame.amplitudes.clone());
-    if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
-        s.frame_history.pop_front();
-    }
-    let sample_rate_hz = 2.0_f64; // fallback tick ~ 500 ms => 2 Hz
-    let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-        extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
-    smooth_and_classify(&mut s, &mut classification, raw_motion);
-    adaptive_override(&s, &features, &mut classification);
-
-    s.source = format!("wifi:{ssid}");
-    s.rssi_history.push_back(rssi_dbm);
-    if s.rssi_history.len() > 60 {
-        s.rssi_history.pop_front();
-    }
-
-    s.tick += 1;
-    let tick = s.tick;
-
-    let motion_score = if classification.motion_level == "active" {
-        0.8
-    } else if classification.motion_level == "present_still" {
-        0.3
-    } else {
-        0.05
-    };
-
-    let raw_vitals = s.vital_detector.process_frame(&frame.amplitudes, &frame.phases);
-    let vitals = smooth_vitals(&mut s, &raw_vitals);
-    s.latest_vitals = vitals.clone();
-
-    let feat_variance = features.variance;
-
-    // Multi-person estimation with temporal smoothing (EMA α=0.10).
-    let raw_score = compute_person_score(&features);
-    s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
-    let est_persons = if classification.presence {
-        let count = score_to_person_count(s.smoothed_person_score, s.prev_person_count);
-        s.prev_person_count = count;
-        count
-    } else {
-        s.prev_person_count = 0;
-        0
-    };
-
-    let mut update = SensingUpdate {
-        msg_type: "sensing_update".to_string(),
-        timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
-        source: format!("wifi:{ssid}"),
-        tick,
-        nodes: vec![NodeInfo {
-            node_id: 0,
-            rssi_dbm,
-            position: [0.0, 0.0, 0.0],
-            amplitude: vec![signal_pct],
-            subcarrier_count: 1,
-        }],
-        features,
-        classification,
-        signal_field: generate_signal_field(
-            rssi_dbm, motion_score, breathing_rate_hz,
-            feat_variance.min(1.0), &sub_variances,
-        ),
-        vital_signs: Some(vitals),
-        enhanced_motion: None,
-        enhanced_breathing: None,
-        posture: None,
-        signal_quality_score: None,
-        quality_verdict: None,
-        bssid_count: None,
-        pose_keypoints: None,
-        model_status: None,
-        persons: None,
-        estimated_persons: if est_persons > 0 { Some(est_persons) } else { None },
-    };
-
-    let persons = derive_pose_from_sensing(&update);
-    if !persons.is_empty() {
-        update.persons = Some(persons);
-    }
-
-    if let Ok(json) = serde_json::to_string(&update) {
-        let _ = s.tx.send(json);
-    }
-    s.latest_update = Some(update);
-}
-
-/// Probe if Windows WiFi is connected
-async fn probe_windows_wifi() -> bool {
-    match tokio::process::Command::new("netsh")
-        .args(["wlan", "show", "interfaces"])
-        .output()
-        .await
-    {
-        Ok(o) => {
-            let out = String::from_utf8_lossy(&o.stdout);
-            parse_netsh_interfaces_output(&out).is_some()
-        }
-        Err(_) => false,
     }
 }
 
@@ -2885,6 +2477,20 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     let vitals = smooth_vitals(&mut s, &raw_vitals);
                     s.latest_vitals = vitals.clone();
 
+                    // MAT triage: compute START triage from vital signs
+                    let triage_input = VitalSignsInput {
+                        breathing_rate_bpm: vitals.breathing_rate_bpm,
+                        breathing_confidence: vitals.breathing_confidence,
+                        heart_rate_bpm: vitals.heart_rate_bpm,
+                        heartbeat_confidence: vitals.heartbeat_confidence,
+                        signal_quality: vitals.signal_quality,
+                        motion_score,
+                        person_id: Some(tick as u32),
+                        node_id: frame.node_id,
+                        rssi: features.mean_rssi,
+                    };
+                    let triage_update = Some(s.triage_engine.process(&triage_input));
+
                     // Multi-person estimation with temporal smoothing (EMA α=0.10).
                     let raw_score = compute_person_score(&features);
                     s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
@@ -2916,12 +2522,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             features.variance.min(1.0), &sub_variances,
                         ),
                         vital_signs: Some(vitals),
-                        enhanced_motion: None,
-                        enhanced_breathing: None,
-                        posture: None,
-                        signal_quality_score: None,
-                        quality_verdict: None,
-                        bssid_count: None,
+                        triage_update,
                         pose_keypoints: None,
                         model_status: None,
                         persons: None,
@@ -2990,6 +2591,20 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         let vitals = smooth_vitals(&mut s, &raw_vitals);
         s.latest_vitals = vitals.clone();
 
+        // MAT triage: compute START triage from simulated vital signs
+        let triage_input = VitalSignsInput {
+            breathing_rate_bpm: vitals.breathing_rate_bpm,
+            breathing_confidence: vitals.breathing_confidence,
+            heart_rate_bpm: vitals.heart_rate_bpm,
+            heartbeat_confidence: vitals.heartbeat_confidence,
+            signal_quality: vitals.signal_quality,
+            motion_score,
+            person_id: Some(tick as u32),
+            node_id: 1,
+            rssi: features.mean_rssi,
+        };
+        let triage_update = Some(s.triage_engine.process(&triage_input));
+
         let frame_amplitudes = frame.amplitudes.clone();
         let frame_n_sub = frame.n_subcarriers;
 
@@ -3024,12 +2639,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 features.variance.min(1.0), &sub_variances,
             ),
             vital_signs: Some(vitals),
-            enhanced_motion: None,
-            enhanced_breathing: None,
-            posture: None,
-            signal_quality_score: None,
-            quality_verdict: None,
-            bssid_count: None,
+            triage_update,
             pose_keypoints: None,
             model_status: if s.model_loaded {
                 Some(serde_json::json!({
@@ -3532,9 +3142,6 @@ async fn main() {
             if probe_esp32(args.udp_port).await {
                 info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
                 "esp32"
-            } else if probe_windows_wifi().await {
-                info!("  Windows WiFi detected");
-                "wifi"
             } else {
                 info!("  No hardware detected, using simulation");
                 "simulate"
@@ -3638,6 +3245,7 @@ async fn main() {
         total_detections: 0,
         start_time: std::time::Instant::now(),
         vital_detector: VitalSignDetector::new(vital_sample_rate),
+        triage_engine: TriageEngine::new(TriageConfig::competition()),
         latest_vitals: VitalSigns::default(),
         rvf_info,
         save_rvf_path: args.save_rvf.clone(),
@@ -3684,9 +3292,6 @@ async fn main() {
         "esp32" => {
             tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
             tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
-        }
-        "wifi" => {
-            tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
         }
         _ => {
             tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));

@@ -1,7 +1,8 @@
 # 竞赛项目构建进度 ✅
 
-> 构建完成: 2026-05-06 17:10 | 审计修正: 2026-05-06 17:15
-> 状态: **阶段 1 代码构建完成 + 通过自审计**
+> 原始构建: 2026-05-06 17:10 | 审计修正: 2026-05-06 17:15
+> **阶段 2 修复 + MAT 集成**: 2026-05-09 08:30
+> 状态: **阶段 2 Cargo 编译通过 + MAT Pipeline 完整集成 ✅**
 
 ---
 
@@ -15,6 +16,51 @@
 | 4 | `deploy.sh` 使用了不存在的 `--triage-ui` CLI 参数 | 改为 `cp triage.html → ui/` + 正确参数 `--ui-path --bind-addr --source` |
 | 5 | 所有 sdkconfig 选项 | 逐项对照 Kconfig.projbuild — 全部真实存在 ✅ |
 
+## 阶段 2 修复记录 (2026-05-09)
+
+### 2.1 Cargo.toml 修复 — 目录评估发现的实际问题
+
+| # | 发现 | 修正 | 文件 |
+|---|------|------|------|
+| 1 | **Workspace 成员缺失** — Cargo.toml 声明 16 个成员但只存在 9 个 (api/db/wasm/cli/train/wifiscan/desktop 无源码) | 删除 8 个不存在成员，保留 core/signal/nn/config/hardware/mat/sensing-server/vitals | `rust-server/Cargo.toml` |
+| 2 | **sensing-server 依赖幽灵 crate** — `wifi-densepose-wifiscan` 不存在 | 替换为 `wifi-densepose-mat` + `signal` + `vitals` | `sensing-server/Cargo.toml` |
+| 3 | **缺失 Cargo.lock** — 整个项目无 lockfile | `cargo check` 自动生成 | — |
+| 4 | **4 个 crate 缺失 bench 文件** — hardware/nn/signal/mat 的 `[[bench]]` 引用不存在的基准文件 | 移除 `[[bench]]` 段 | 4× `Cargo.toml` |
+
+### 2.2 Windows WiFi 代码剔除
+
+| # | 删除内容 | 行数 |
+|---|----------|:--:|
+| 1 | `parse_netsh_interfaces_output()` — netsh 输出解析 | ~30 |
+| 2 | `windows_wifi_task()` — 多BSSID扫描管道 | ~220 |
+| 3 | `windows_wifi_fallback_tick()` — 单RSSI回退 | ~125 |
+| 4 | `probe_windows_wifi()` — Windows WiFi 探测 | ~15 |
+| 5 | `SensingUpdate` 中 7 个 BSSID 字段 | — |
+| 6 | `main()` 中 `"wifi"` 源分支 | — |
+| **合计** | **约 390 行删除** | |
+
+**原因**: 竞赛目标平台为 RZ/V2H (ARM Linux)，不存在 Windows `netsh` 命令。原代码依赖 `wifi-densepose-wifiscan` crate 用于 Windows 笔记本 CSI 采集。
+
+### 2.3 MAT Pipeline 完整集成 ⭐
+
+| # | 修改 | 位置 |
+|---|------|------|
+| 1 | `AppStateInner` 新增 `triage_engine: TriageEngine` 字段 | `main.rs` struct |
+| 2 | `main()` 初始化 `TriageEngine::new(TriageConfig::competition())` | `main.rs` state 构造 |
+| 3 | `udp_receiver_task` — ESP32 帧处理后调用 `triage_engine.process()` → `TriageUpdate` 写入 `SensingUpdate.triage_update` | `main.rs:2480` |
+| 4 | `simulated_data_task` — 模拟帧处理后同样集成 MAT | `main.rs:2590` |
+| 5 | `SensingUpdate` 新增 `triage_update: Option<TriageUpdate>` 字段 (START分诊+伤员追踪+告警) | `main.rs` struct |
+| 6 | `lib.rs` 新增 `pub mod mat_pipeline;` | `lib.rs` |
+
+### 2.4 编译结果
+
+```
+cargo check  → ✅ 编译通过
+  - 0 errors
+  - 247 warnings (226 from mat crate 缺失文档 + 21 from sensing-server 未使用字段)
+  - warnings 均为非阻断性（缺失文档注释、未使用变量），不影响功能
+```
+
 ---
 
 ## 进度总览
@@ -27,9 +73,16 @@
 | P3 | 竞赛固件配置 | ✅ Kconfig 已验证 |
 | P4 | 部署脚本 (deploy.sh) | ✅ CLI 参数已验证 |
 | P5 | WASM 模块清单 | ✅ |
-| P6 | 最终检查 | ✅ |
+| P6 | 最终检查 (阶段1) | ✅ |
+| **P7** | **Cargo.toml 修复 + 编译通过** | ✅ **2026-05-09** |
+| **P8** | **MAT Pipeline 完整集成** | ✅ **2026-05-09** |
+| P9 | 端侧 LLM 代码实现 | ❌ 待开发 |
+| P10 | 竞赛申报材料 | ❌ 待准备 |
+| P11 | 硬件联调 | ❌ 需硬件 |
 
-## 新建/修改文件 (11个)
+## 新建/修改文件 (阶段1: 11个 + 阶段2: 17个)
+
+### 阶段1 (2026-05-06)
 
 | 文件 | 大小 | 审计状态 |
 |------|------|:--:|
@@ -45,36 +98,73 @@
 | `firmware/*/sdkconfig.defaults.competition` | 1.5KB | ✅ Kconfig 验证 |
 | `rust-port/*/mat_pipeline.rs` | 15.6KB | ✅ 纯分诊层 |
 
-## 数据流架构
+### 阶段2 (2026-05-09) — Cargo修复 + MAT集成
+
+| 文件 | 修改类型 | 说明 |
+|------|:--:|------|
+| `rust-server/Cargo.toml` | 修改 | workspace 成员 16→8 |
+| `sensing-server/Cargo.toml` | 修改 | wifiscan→mat+signal+vitals |
+| `sensing-server/src/lib.rs` | 修改 | 添加 mat_pipeline 模块 |
+| `sensing-server/src/main.rs` | 重大修改 | 删390行wifiscan + 集成MAT pipeline |
+| `sensing-server/src/mat_pipeline.rs` | 修复 | breathing_rate/heart_rate 字段名 |
+| `hardware/Cargo.toml` | 修改 | 移除缺失 bench |
+| `nn/Cargo.toml` | 修改 | 移除缺失 bench |
+| `signal/Cargo.toml` | 修改 | 移除缺失 bench |
+| `mat/Cargo.toml` | 修改 | 移除缺失 bench |
+| `Cargo.lock` | 新建 | `cargo check` 自动生成 |
+
+## 数据流架构 (更新: MAT 已集成)
 
 ```
 ESP32-C5 ×3                  RZ/V2H                             Browser
 ─────────────    ────────────────────────────    ─────────────────────────
 CSI 采集        UDP:5005 → sensing-server
                             │
-                            ├─ esp32_parser → amplitudes/phases
-                            ├─ VitalSignDetector (FFT) → VitalSigns
-                            ├─ 现有 /ws/sensing → SensingUpdate JSON
-                            │                         │
-                            │    ┌────────────────────┘
-                            │    ▼
-                            │  triage.html (JS)
-                            │    ├─ START 分诊 (VitalSigns → 红/黄/绿/黑)
-                            │    ├─ 伤员追踪 (NodeID 匹配)
-                            │    ├─ 位置估算 (RSSI → 米)
-                            │    └─ Canvas 2D 地图渲染
+                            ├─ parse_esp32_frame()     → amplitudes/phases
+                            ├─ VitalSignDetector        → VitalSigns (呼吸率/心率)
+                            ├─ TriageEngine.process()   → TriageUpdate ⭐ NEW
+                            │    ├─ START 分诊 (红/黄/绿/黑)
+                            │    ├─ 伤员追踪 (创建/匹配/更新)
+                            │    ├─ 恶化检测 + 告警生成
+                            │    └─ 群体伤情评估
                             │
-                            └─ [可选] ONNX DensePose → 3D骨架按钮
+                            ├─ SensingUpdate 构造
+                            │  ├─ vital_signs: VitalSigns
+                            │  └─ triage_update: TriageUpdate ⭐ NEW
+                            │
+                            └─ WebSocket /ws/sensing ──→ triage.html
+                                                         ├─ 伤员地图 (Canvas 2D)
+                                                         ├─ 生命体征卡片
+                                                         ├─ START 分诊状态
+                                                         └─ 告警列表
 ```
 
-## 待完成 (需硬件)
+## 待完成
 
-| 任务 | 依赖 |
-|------|------|
-| C5 固件编译 | ESP-IDF v5.5+ |
-| Rust aarch64 交叉编译 | RZ/V2H SDK |
-| 3 节点 烧录+联调 | 硬件 |
-| 设计报告 + 视频 + PPT | 联调通过 |
+### 代码层面
+
+| 任务 | 优先级 | 依赖 |
+|------|:--:|------|
+| **端侧 LLM 代码实现** | 🔴 必须 | candle + Qwen2.5-0.5B GGUF |
+| C5 固件编译 | 🔴 必须 | ESP-IDF v5.5+ |
+| Rust aarch64 交叉编译 | 🔴 必须 | RZ/V2H SDK |
+| 3 节点 烧录+联调 | 🔴 必须 | 硬件 |
+
+### 竞赛材料
+
+| 任务 | 优先级 |
+|------|:--:|
+| 竞赛申报书/项目简介 | 🔴 必须 |
+| 答辩 PPT (12-15页) | 🔴 必须 |
+| 演示脚本 (5分钟) | 🔴 必须 |
+| 设计报告 | 🔴 必须 |
+| 系统架构图 (展板) | 🟡 重要 |
+| 性能测试数据 | 🟡 重要 |
+| 评委快速卡片 | 🟡 重要 |
+| 现场故障预案 | 🟡 重要 |
+| 项目视频 (3分钟) | 🟢 加分 |
+
+---
 
 ## 第二轮深度审计追加发现 (17:37)
 

@@ -13,3 +13,4 @@ pub mod dataset;
 pub mod sona;
 pub mod sparse_inference;
 pub mod embedding;
+pub mod mat_pipeline;
