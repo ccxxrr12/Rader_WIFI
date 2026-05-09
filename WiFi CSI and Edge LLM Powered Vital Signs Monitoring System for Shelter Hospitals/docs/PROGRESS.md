@@ -82,7 +82,7 @@ cargo check  → ✅ 编译通过
 |---|------|------|
 | 1 | `docs/README_COMPETITION.md` | `competition/`→`docs/`、URL修正、目录树重写、架构图更新 |
 | 2 | `docs/ESP32-C5 移植指南.md` | 矛盾结论统一、固件路径修正、删除不存在文件引用、C5改为推荐 |
-| 3 | `README.md` | 删除不存在文件引用、文档表补全 |
+| 3 | `README.md` | 完整重写：增加逐层功能详解（6层）、数据流图、文件表补全、LLM状态如实标注 |
 | 4 | `docs/PROGRESS.md` | 阶段1文件表路径修正 (`competition/`→`docs/`、`rust-port/`→`rust-server/`) |
 | 5 | `docs/竞赛改造方案.md` | N1代码示例重写(TriageEngine)、`competition/` 目录结构更新 |
 | 6 | `docs/竞赛准备清单.md` | WASM数量(65→10)、`competition/`→`docs/` |
