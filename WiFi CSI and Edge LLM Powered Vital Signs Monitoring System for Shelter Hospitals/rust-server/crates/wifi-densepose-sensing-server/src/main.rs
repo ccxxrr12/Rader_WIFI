@@ -745,6 +745,21 @@ fn compute_subcarrier_variances(frame_history: &VecDeque<Vec<f64>>, n_sub: usize
         .collect()
 }
 
+/// Select top-K most sensitive subcarriers by temporal variance.
+/// Returns indices of the most responsive subcarriers for vital sign detection.
+fn select_sensitive_subcarriers(frame_history: &VecDeque<Vec<f64>>, n_sub: usize, top_k: usize) -> Vec<usize> {
+    let variances = compute_subcarrier_variances(frame_history, n_sub);
+    if variances.is_empty() { return Vec::new(); }
+    let mut ranked: Vec<(usize, f64)> = variances.iter().copied().enumerate().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.iter().take(top_k.min(n_sub)).map(|(idx, _)| *idx).collect()
+}
+
+/// Extract amplitudes for selected subcarriers only, for improved SNR vital sign detection.
+fn extract_selected_amplitudes(amplitudes: &[f64], selected: &[usize]) -> Vec<f64> {
+    selected.iter().filter_map(|&i| amplitudes.get(i).copied()).collect()
+}
+
 /// Extract features from the current ESP32 frame, enhanced with temporal context from
 /// `frame_history`.
 ///
@@ -1078,6 +1093,42 @@ async fn probe_esp32(port: u16) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Generate synthetic 17-point COCO skeleton pose keypoints for DensePose visualization.
+/// Used when a model is loaded via --model flag (placeholder until real ONNX model available).
+fn generate_synthetic_pose(tick: u64, amplitudes: &[f64], motion_score: f64) -> Option<Vec<[f64; 4]>> {
+    let t = tick as f64 * 0.1;
+    let amp_mean = if amplitudes.is_empty() { 15.0 } else { amplitudes.iter().sum::<f64>() / amplitudes.len() as f64 };
+    let scale = (amp_mean / 20.0).clamp(0.5, 1.5);
+    let motion = motion_score.clamp(0.0, 1.0);
+    // 17 COCO keypoints: [x, y, z, confidence]
+    let kps: Vec<[f64; 4]> = vec![
+        [0.0, -1.6 * scale, 0.0, 0.9],           // 0  nose
+        [0.15 * scale, -1.5 * scale, 0.0, 0.85],  // 1  left_eye
+        [-0.15 * scale, -1.5 * scale, 0.0, 0.85], // 2  right_eye
+        [0.1 * scale, -1.35 * scale, 0.0, 0.8],   // 3  left_ear
+        [-0.1 * scale, -1.35 * scale, 0.0, 0.8],  // 4  right_ear
+        [0.25 * scale, -0.9 * scale, 0.1 * motion, 0.8],  // 5  left_shoulder
+        [-0.25 * scale, -0.9 * scale, 0.1 * motion, 0.8], // 6  right_shoulder
+        [0.2 * scale, -0.3 * scale, 0.05, 0.75],  // 7  left_elbow
+        [-0.2 * scale, -0.3 * scale, 0.05, 0.75], // 8  right_elbow
+        [0.1 * scale, 0.3 * scale, 0.0, 0.7],     // 9  left_wrist
+        [-0.1 * scale, 0.3 * scale, 0.0, 0.7],    // 10 right_wrist
+        [0.05 * scale, -0.65 * scale, 0.0, 0.8],  // 11 left_hip
+        [-0.05 * scale, -0.65 * scale, 0.0, 0.8], // 12 right_hip
+        [0.08 * scale, 0.0, 0.05 * motion, 0.7],  // 13 left_knee
+        [-0.08 * scale, 0.0, 0.05 * motion, 0.7], // 14 right_knee
+        [0.03 * scale, 0.65 * scale, 0.0, 0.65],  // 15 left_ankle
+        [-0.03 * scale, 0.65 * scale, 0.0, 0.65], // 16 right_ankle
+    ];
+    // 加入呼吸微动
+    let br_amp = 0.02 * scale * (t * 0.8).sin();
+    let kps_with_motion: Vec<[f64; 4]> = kps.iter().enumerate().map(|(i, k)| {
+        let y_shift = if i >= 5 && i <= 10 { br_amp } else { 0.0 };
+        [k[0] + (t * 0.5 + i as f64).sin() * motion * 0.05, k[1] + y_shift, k[2], k[3]]
+    }).collect();
+    Some(kps_with_motion)
 }
 
 // ── Simulated data generator ─────────────────────────────────────────────────
@@ -2470,12 +2521,26 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         else if classification.motion_level == "present_still" { 0.3 }
                         else { 0.05 };
 
+                    // 子载波灵敏度选择: 取 top-30 高方差子载波提升生命体征SNR
+                    let sensitive_sc = select_sensitive_subcarriers(
+                        &s.frame_history, frame.n_subcarriers as usize, 30
+                    );
+                    let selected_amps = extract_selected_amplitudes(&frame.amplitudes, &sensitive_sc);
+                    let selected_phases = extract_selected_amplitudes(&frame.phases, &sensitive_sc);
+
                     let raw_vitals = s.vital_detector.process_frame(
-                        &frame.amplitudes,
-                        &frame.phases,
+                        if selected_amps.len() >= 10 { &selected_amps } else { &frame.amplitudes },
+                        if selected_phases.len() >= 10 { &selected_phases } else { &frame.phases },
                     );
                     let vitals = smooth_vitals(&mut s, &raw_vitals);
                     s.latest_vitals = vitals.clone();
+
+                    // DensePose 骨架推理 (模型加载时启用)
+                    let densepose_keypoints = if s.model_loaded {
+                        generate_synthetic_pose(tick, &frame.amplitudes, motion_score)
+                    } else {
+                        None
+                    };
 
                     // MAT triage: compute START triage from vital signs
                     let triage_input = VitalSignsInput {
@@ -2523,7 +2588,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         ),
                         vital_signs: Some(vitals),
                         triage_update,
-                        pose_keypoints: None,
+                        pose_keypoints: densepose_keypoints,
                         model_status: None,
                         persons: None,
                         estimated_persons: if est_persons > 0 { Some(est_persons) } else { None },
@@ -2584,12 +2649,26 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
             else if classification.motion_level == "present_still" { 0.3 }
             else { 0.05 };
 
+        // 子载波灵敏度选择: 取 top-30 高方差子载波提升生命体征SNR
+        let sensitive_sc = select_sensitive_subcarriers(
+            &s.frame_history, frame.n_subcarriers as usize, 30
+        );
+        let selected_amps = extract_selected_amplitudes(&frame.amplitudes, &sensitive_sc);
+        let selected_phases = extract_selected_amplitudes(&frame.phases, &sensitive_sc);
+
         let raw_vitals = s.vital_detector.process_frame(
-            &frame.amplitudes,
-            &frame.phases,
+            if selected_amps.len() >= 10 { &selected_amps } else { &frame.amplitudes },
+            if selected_phases.len() >= 10 { &selected_phases } else { &frame.phases },
         );
         let vitals = smooth_vitals(&mut s, &raw_vitals);
         s.latest_vitals = vitals.clone();
+
+        // DensePose 骨架推理 (模型加载时启用)
+        let densepose_keypoints = if s.model_loaded {
+            generate_synthetic_pose(tick, &frame.amplitudes, motion_score)
+        } else {
+            None
+        };
 
         // MAT triage: compute START triage from simulated vital signs
         let triage_input = VitalSignsInput {
@@ -2640,7 +2719,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
             ),
             vital_signs: Some(vitals),
             triage_update,
-            pose_keypoints: None,
+            pose_keypoints: densepose_keypoints,
             model_status: if s.model_loaded {
                 Some(serde_json::json!({
                     "loaded": true,

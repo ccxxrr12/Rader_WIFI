@@ -248,6 +248,8 @@ pub struct TriageEngine {
     alerts: Vec<AlertSnapshot>,
     counter: u32,
     start_time: f64,
+    /// Per-survivor recent RSSI readings from each node, for multi-node triangulation
+    node_observations: HashMap<String, HashMap<u8, (f64, f64)>>,  // survivor_id -> {node_id -> (rssi, timestamp)}
 }
 
 impl TriageEngine {
@@ -255,6 +257,7 @@ impl TriageEngine {
         Self {
             config, survivors: HashMap::new(), alerts: Vec::new(),
             counter: 0, start_time: now_secs(),
+            node_observations: HashMap::new(),
         }
     }
 
@@ -287,11 +290,35 @@ impl TriageEngine {
             s.motion_history.push(input.motion_score);
             if s.motion_history.len() > 30 { s.motion_history.remove(0); }
 
-            // 位置估计
-            if let Some((nx, ny, nz)) = self.config.node_positions.get(&input.node_id) {
+            // 位置估计: 多节点三角定位 (替代简易RSSI→距离)
+            // 记录当前节点的RSSI观测
+            let obs = self.node_observations.entry(sid.clone()).or_default();
+            obs.insert(input.node_id, (input.rssi, now));
+            // 清理超过5秒的旧观测
+            obs.retain(|_, (_, t)| now - *t < 5.0);
+            
+            // 多节点三角定位
+            if obs.len() >= 2 {
+                // 使用2+个节点的RSSI距离进行加权位置估计
+                let mut wx = 0.0f64; let mut wy = 0.0f64; let mut wz = 0.0f64;
+                let mut total_w = 0.0f64;
+                for (nid, (rssi, _)) in obs.iter() {
+                    if let Some((nx, ny, nz)) = self.config.node_positions.get(nid) {
+                        let d = rssi_to_distance(*rssi);
+                        let w = 1.0 / (d.max(0.3));  // 距离越近权重越高
+                        wx += nx * w; wy += ny * w; wz += nz * w;
+                        total_w += w;
+                    }
+                }
+                if total_w > 0.0 {
+                    s.position = (wx / total_w, wy / total_w, wz / total_w);
+                    s.position_confidence = (obs.len() as f64 / 3.0).min(1.0) * input.signal_quality;
+                }
+            } else if let Some((nx, ny, nz)) = self.config.node_positions.get(&input.node_id) {
+                // 单节点: 基于RSSI的距离估计 (保留旧逻辑作为回退)
                 let d = rssi_to_distance(input.rssi);
                 s.position = (nx + d * 0.5, ny + d * 0.3, nz * 0.5);
-                s.position_confidence = input.signal_quality;
+                s.position_confidence = input.signal_quality * 0.5;
             }
 
             // 分诊判定

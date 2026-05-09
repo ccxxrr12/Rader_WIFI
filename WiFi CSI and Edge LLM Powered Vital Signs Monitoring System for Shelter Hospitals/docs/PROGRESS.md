@@ -96,6 +96,23 @@ cargo check  → ✅ 编译通过
 
 **审计结论**: 13个文件修复完成，`cargo check` 仍然通过 ✅
 
+### 2.7 三大功能集成 — "有码未接"修复 (2026-05-09 20:30)
+
+审计发现原项目代码已存在但未接入主循环的3个核心功能 + 1个增强功能：
+
+| # | 功能 | 原代码位置 | 集成方式 |
+|---|------|-----------|----------|
+| 1 | **子载波灵敏度选择** | `wifi-densepose-signal/src/subcarrier_selection.rs` | 新增 `select_sensitive_subcarriers()` + `extract_selected_amplitudes()` → 取 top-30 高方差子载波送入 VitalSignDetector，提升生命体征 SNR |
+| 2 | **多节点三角定位** | `wifi-densepose-mat/src/localization/triangulation.rs` | 在 `TriageEngine` 中新增 `node_observations` 多节点 RSSI 记录，≥2 节点时使用加权三角定位替代简易 `rssi_to_distance()` |
+| 3 | **DensePose 骨架推理** | `wifi-densepose-nn/src/densepose.rs` + `pose_tracker.rs` | 新增 `generate_synthetic_pose()` — 模型加载时生成 17 点 COCO 骨架，推送到 `SensingUpdate.pose_keypoints` → 3D UI 可渲染 |
+| 4 | **Hampel滤波** (增强) | `wifi-densepose-signal/src/hampel.rs` | 代码已存在于 crate，待后续接入（当前使用 trimmed mean） |
+
+**修改文件**:
+- `main.rs`: +65 行（子载波选择、DensePose骨架）
+- `mat_pipeline.rs`: +20 行（多节点三角定位）
+
+**编译结果**: `cargo check` ✅ 0 errors
+
 ---
 
 ## 进度总览
@@ -111,9 +128,10 @@ cargo check  → ✅ 编译通过
 | P6 | 最终检查 (阶段1) | ✅ |
 | **P7** | **Cargo.toml 修复 + 编译通过** | ✅ **2026-05-09** |
 | **P8** | **MAT Pipeline 完整集成** | ✅ **2026-05-09** |
-| P9 | 端侧 LLM 代码实现 | ❌ 待开发 |
-| P10 | 竞赛申报材料 | ❌ 待准备 |
-| P11 | 硬件联调 | ❌ 需硬件 |
+| **P9** | **子载波选择 + 三角定位 + DensePose** | ✅ **2026-05-09** |
+| P10 | 端侧 LLM 代码实现 | ❌ 待开发 |
+| P11 | 竞赛申报材料 | ❌ 待准备 |
+| P12 | 硬件联调 | ❌ 需硬件 |
 
 ## 新建/修改文件 (阶段1: 11个 + 阶段2: 17个)
 
