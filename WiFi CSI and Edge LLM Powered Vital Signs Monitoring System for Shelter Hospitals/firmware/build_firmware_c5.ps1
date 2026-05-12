@@ -32,8 +32,8 @@ $env:PATH = "C:\Espressif\tools\riscv32-esp-elf\esp-14.2.0_20241119\riscv32-esp-
 # Set flash port (change to your C5 board's COM port)
 $flash_port = "COM7"
 
-# Firmware directory
-Set-Location "C:\Users\17691\.openclaw\workspace\Repository\Rader_WIFI\firmware\esp32-c5-csi-node"
+# Firmware directory (relative to script location)
+Set-Location $PSScriptRoot
 
 $python = "$env:IDF_PYTHON_ENV_PATH\Scripts\python.exe"
 $idf = "$env:IDF_PATH\tools\idf.py"

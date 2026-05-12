@@ -9,6 +9,7 @@
 //! Replaces both ws_server.py and the Python HTTP server.
 
 mod adaptive_classifier;
+mod edge_module_engine;
 mod rvf_container;
 mod rvf_pipeline;
 mod vital_signs;
@@ -49,6 +50,7 @@ use vital_signs::{VitalSignDetector, VitalSigns};
 
 // MAT triage pipeline (competition core)
 use mat_pipeline::{TriageEngine, TriageConfig, VitalSignsInput};
+use edge_module_engine::{EdgeModuleEngine, EdgeAlert};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -180,6 +182,9 @@ struct SensingUpdate {
     /// MAT triage update (START triage + survivor tracking + alerts).
     #[serde(skip_serializing_if = "Option::is_none")]
     triage_update: Option<mat_pipeline::TriageUpdate>,
+    /// Edge module alerts from WASM modules (native compilation for demo).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wasm_alerts: Option<Vec<EdgeAlert>>,
     // ── ADR-023 Phase 7-8: Model inference fields ──
     /// Pose keypoints when a trained model is loaded (x, y, z, confidence).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,6 +329,8 @@ struct AppStateInner {
     edge_vitals: Option<Esp32VitalsPacket>,
     /// ADR-040: Latest WASM output packet from ESP32.
     latest_wasm_events: Option<WasmOutputPacket>,
+    /// Edge module engine (native compilation of WASM modules for competition demo).
+    edge_engine: EdgeModuleEngine,
     // ── Model management fields ─────────────────────────────────────────────
     /// Discovered RVF model files from `data/models/`.
     discovered_models: Vec<serde_json::Value>,
@@ -2556,6 +2563,15 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     };
                     let triage_update = Some(s.triage_engine.process(&triage_input));
 
+                    // Edge module engine: run all 10 modules
+                    let amps_f32: Vec<f32> = frame.amplitudes.iter().map(|a| *a as f32).collect();
+                    let phases_f32: Vec<f32> = frame.phases.iter().map(|p| *p as f32).collect();
+                    let wasm_alerts = Some(s.edge_engine.process_frame(
+                        &phases_f32, &amps_f32, raw_motion as f32,
+                        vitals.breathing_rate_bpm, vitals.heart_rate_bpm,
+                        classification.presence,
+                    ));
+
                     // Multi-person estimation with temporal smoothing (EMA α=0.10).
                     let raw_score = compute_person_score(&features);
                     s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
@@ -2588,6 +2604,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         ),
                         vital_signs: Some(vitals),
                         triage_update,
+                        wasm_alerts,
                         pose_keypoints: densepose_keypoints,
                         model_status: None,
                         persons: None,
@@ -2684,6 +2701,15 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         };
         let triage_update = Some(s.triage_engine.process(&triage_input));
 
+        // Edge module engine: run all 10 modules
+        let amps_f32: Vec<f32> = frame.amplitudes.iter().map(|a| *a as f32).collect();
+        let phases_f32: Vec<f32> = frame.phases.iter().map(|p| *p as f32).collect();
+        let wasm_alerts = Some(s.edge_engine.process_frame(
+            &phases_f32, &amps_f32, raw_motion as f32,
+            vitals.breathing_rate_bpm, vitals.heart_rate_bpm,
+            classification.presence,
+        ));
+
         let frame_amplitudes = frame.amplitudes.clone();
         let frame_n_sub = frame.n_subcarriers;
 
@@ -2719,6 +2745,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
             ),
             vital_signs: Some(vitals),
             triage_update,
+            wasm_alerts,
             pose_keypoints: densepose_keypoints,
             model_status: if s.model_loaded {
                 Some(serde_json::json!({
@@ -3347,6 +3374,7 @@ async fn main() {
         br_buffer: VecDeque::with_capacity(8),
         edge_vitals: None,
         latest_wasm_events: None,
+        edge_engine: EdgeModuleEngine::new(),
         // Model management
         discovered_models: initial_models,
         active_model_id: None,

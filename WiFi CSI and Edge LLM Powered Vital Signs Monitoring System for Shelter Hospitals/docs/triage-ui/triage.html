@@ -47,6 +47,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#e0e0e
 .alert-item.prio1{border-left:3px solid #f44336}
 .alert-item.prio2{border-left:3px solid #ff9800}
 .alert-item .time{color:#78909c}
+.wasm-alert{font-size:.7em;padding:4px 6px;border-radius:3px;margin-bottom:3px;background:#1a1f2e;border-left:3px solid #607d8b}
+.wasm-alert.critical{border-left-color:#f44336}
+.wasm-alert.warning{border-left-color:#ff9800}
+.wasm-alert.info{border-left-color:#4fc3f7}
+.wasm-alert .wmod{color:#78909c;font-family:monospace}
 .map-legend{position:absolute;bottom:15px;left:15px;background:#1a1f2ecc;padding:8px;border-radius:6px;font-size:.7em}
 .map-legend div{margin:3px 0;display:flex;align-items:center;gap:6px}
 .map-legend .dot{width:10px;height:10px;border-radius:50%}
@@ -92,6 +97,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#e0e0e
     </div>
     <div id="slist"><p style="color:#666;font-size:.8em">等待 CSI 数据...</p></div>
     <div class="alerts"><h3>⚠ 告警</h3><div id="alist"><p style="color:#666;font-size:.75em">暂无</p></div></div>
+    <div class="alerts" style="margin-top:6px"><h3>🔬 边缘模块</h3><div id="walist"><p style="color:#666;font-size:.7em">边缘模块就绪，等待事件...</p></div></div>
   </div>
 </div>
 
@@ -206,6 +212,16 @@ function renderFromServer(){
   }
 
   draw();
+
+  // ── WASM 边缘模块告警 ──
+  const wal = document.getElementById('walist');
+  if(wal && latestUpdate && latestUpdate.wasm_alerts && latestUpdate.wasm_alerts.length){
+    wal.innerHTML = latestUpdate.wasm_alerts.slice(0,10).map(a=>
+      `<div class="wasm-alert ${a.severity}"><span class="wmod">[${a.module}]</span> ${a.event_name}: ${a.value.toFixed(1)}</div>`
+    ).join('');
+  } else if(wal) {
+    wal.innerHTML = '<p style="color:#666;font-size:.7em">边缘模块就绪，等待事件...</p>';
+  }
 }
 
 // ── 备用渲染 (本地 JS 计算, 无服务端 MAT 时使用) ──
