@@ -1,4 +1,4 @@
-# π RuView — 基于WiFi CSI感知的极端条件人员监护系统
+# WCES — 基于WiFi CSI感知的极端条件人员监护系统
 
 > 第九届全国大学生嵌入式芯片与系统设计竞赛 · 瑞萨赛道
 > 硬件：瑞萨 RZ/V2H + 3× ESP32-C5-DevKitC-1-N8R8
@@ -58,11 +58,11 @@ cd ..
 cd rust-server
 cargo run -p wifi-densepose-sensing-server -- \
     --source simulate \
-    --ui-path ../../docs/triage-ui \
+    --ui-path ../docs/triage-ui \
     --bind-addr 0.0.0.0 \
     --http-port 8080
 
-# 浏览器打开 http://localhost:8080/triage.html
+# 浏览器打开 http://localhost:8080/ui/triage.html
 # 即可看到完整分诊仪表盘（伤员地图 + 生命体征 + START 分诊 + 边缘模块告警）
 ```
 

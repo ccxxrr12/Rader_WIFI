@@ -215,8 +215,8 @@ function renderFromServer(){
 
   // ── WASM 边缘模块告警 ──
   const wal = document.getElementById('walist');
-  if(wal && latestUpdate && latestUpdate.wasm_alerts && latestUpdate.wasm_alerts.length){
-    wal.innerHTML = latestUpdate.wasm_alerts.slice(0,10).map(a=>
+  if(wal && latestVitals && latestVitals.wasm_alerts && latestVitals.wasm_alerts.length){
+    wal.innerHTML = latestVitals.wasm_alerts.slice(0,10).map(a=>
       `<div class="wasm-alert ${a.severity}"><span class="wmod">[${a.module}]</span> ${a.event_name}: ${a.value.toFixed(1)}</div>`
     ).join('');
   } else if(wal) {
@@ -312,7 +312,8 @@ function avg(a){return a.reduce((x,y)=>x+y,0)/a.length}
 // ── WebSocket ──
 let ws;
 function connect(){
-  ws=new WebSocket(`ws://${location.host}/ws/sensing`);
+  // WebSocket on port 8765 (separate from HTTP 8080)
+  ws=new WebSocket(`ws://${location.hostname}:8765/ws/sensing`);
   ws.onopen=()=>{document.getElementById('sd').className='dot online';document.getElementById('st').textContent='已连接';
     latestTriage=null; localSurvivors={}; localAlerts=[]; localSeq=0;
   };

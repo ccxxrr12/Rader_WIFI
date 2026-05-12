@@ -2417,12 +2417,13 @@ async fn sona_activate(
 async fn info_page() -> Html<String> {
     Html(format!(
         "<html><body>\
-         <h1>WiFi-DensePose Sensing Server</h1>\
-         <p>Rust + Axum + RuVector</p>\
+         <h1>π RuView — WiFi-DensePose Sensing Server</h1>\
+         <p>Rust + Axum + RuVector | 模拟模式运行中</p>\
          <ul>\
+         <li><a href='/ui/triage.html'><strong>/ui/triage.html</strong></a> —<strong>分诊仪表盘 (竞赛核心)</strong></li>\
          <li><a href='/health'>/health</a> —Server health</li>\
-         <li><a href='/api/v1/sensing/latest'>/api/v1/sensing/latest</a> —Latest sensing data</li>\
          <li><a href='/api/v1/vital-signs'>/api/v1/vital-signs</a> —Vital sign estimates (HR/RR)</li>\
+         <li><a href='/api/v1/sensing/latest'>/api/v1/sensing/latest</a> —Latest sensing data</li>\
          <li><a href='/api/v1/model/info'>/api/v1/model/info</a> —RVF model container info</li>\
          <li>ws://localhost:8765/ws/sensing —WebSocket stream</li>\
          </ul>\
@@ -3495,7 +3496,7 @@ async fn main() {
     let http_listener = tokio::net::TcpListener::bind(http_addr).await
         .expect("Failed to bind HTTP port");
     info!("HTTP server listening on {http_addr}");
-    info!("Open http://localhost:{}/ui/index.html in your browser", args.http_port);
+    info!("Open http://localhost:{}/ui/triage.html in your browser", args.http_port);
 
     // Run the HTTP server with graceful shutdown support
     let shutdown_state = state.clone();
