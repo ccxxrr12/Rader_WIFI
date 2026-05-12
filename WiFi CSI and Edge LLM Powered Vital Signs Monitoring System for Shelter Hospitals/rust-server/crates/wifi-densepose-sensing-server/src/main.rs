@@ -2543,8 +2543,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     let vitals = smooth_vitals(&mut s, &raw_vitals);
                     s.latest_vitals = vitals.clone();
 
-                    // DensePose 骨架推理 (模型加载时启用)
-                    let densepose_keypoints = if s.model_loaded {
+                    // DensePose 骨架推理 (模拟模式始终生成合成骨架)
+                    let densepose_keypoints = if s.model_loaded || s.source == "simulated" {
                         generate_synthetic_pose(tick, &frame.amplitudes, motion_score)
                     } else {
                         None
@@ -2681,8 +2681,8 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         let vitals = smooth_vitals(&mut s, &raw_vitals);
         s.latest_vitals = vitals.clone();
 
-        // DensePose 骨架推理 (模型加载时启用)
-        let densepose_keypoints = if s.model_loaded {
+        // DensePose 骨架推理 (模拟模式始终生成合成骨架)
+        let densepose_keypoints = if s.model_loaded || s.source == "simulated" {
             generate_synthetic_pose(tick, &frame.amplitudes, motion_score)
         } else {
             None

@@ -138,6 +138,39 @@ cargo check  → ✅ 编译通过
 - `docs/triage-ui/triage.html`: +20 行（WASM 告警渲染）
 - `docs/PROGRESS.md`: 本条目
 
+### 2.9 全项目审计 + 重命名 + 骨架模拟启用 (2026-05-12)
+
+#### 全项目审计修复
+| # | 发现 | 修复 |
+|---|------|------|
+| 1 | triage.html `latestUpdate` 变量不存在（应为 `latestVitals`） | ✅ 修正变量名 |
+| 2 | triage.html WebSocket 连接端口错误（`location.host`→8080，应为8765） | ✅ 改为 `location.hostname:8765` |
+| 3 | main.rs 启动日志指向 `/ui/index.html`（不存在） | ✅ 改为 `/ui/triage.html` |
+| 4 | info_page 主页缺少 triage.html 链接 | ✅ 新增显眼链接 |
+| 5 | `--ui-path ../../docs/triage-ui` 路径错误（多一层 `..`） | ✅ 改为 `../docs/triage-ui` |
+| 6 | deploy.sh SENSING_BIN 路径缺少 `rust-server/` | ✅ 修正 |
+| 7 | README.md 模拟命令缺少 `--` 和完整参数 | ✅ 补全 |
+
+#### 项目重命名
+- `π RuView` → `WCES`
+- 中文名：基于WIFI CSI感知与端侧LLM的方舱生命体征感知与监护系统
+- 英文名：WiFi CSI and Edge LLM Powered Vital Signs Monitoring System for Shelter Hospitals
+- 覆盖文件：15个（deploy.sh、triage.html、observatory.html、pose-fusion.html、main.rs、README.md、PROGRESS.md、README_COMPETITION.md、ML架构详解.md、目录审计报告.md、竞赛准备清单.md、竞赛差距分析.md、竞赛改造方案.md、项目完整分析报告.md、mod.rs、tdm.rs）
+
+#### 骨架模拟启用
+- `pose_keypoints` 在模拟模式下始终生成合成 17 点 COCO 骨架（含呼吸微动动画）
+- 不再需要加载 .rvf 模型即可看到 3D 骨架
+- 从基座项目复制 2 个训练好的 .rvf 模型到 `data/models/`
+
+#### 新建文档
+- `docs/API_REFERENCE.md`：完整 WebSocket 数据接口文档（15字段+30事件枚举+UI渲染建议）
+
+#### 其他修复
+- .gitignore 创建
+- build_firmware_c5.ps1 硬编码路径 → `$PSScriptRoot` 相对路径
+
+**编译结果**: `cargo check` ✅ 0 errors
+
 ---
 
 ## 进度总览
@@ -155,6 +188,7 @@ cargo check  → ✅ 编译通过
 | **P8** | **MAT Pipeline 完整集成** | ✅ **2026-05-09** |
 | **P9** | **子载波选择 + 三角定位 + DensePose** | ✅ **2026-05-09** |
 | **P10a** | **WASM 边缘模块集成 (10个)** | ✅ **2026-05-12** |
+| **P10b** | **全项目审计修复 + 重命名WCES + 骨架模拟启用** | ✅ **2026-05-12** |
 | P10 | 端侧 LLM 代码实现 | ❌ 待开发 |
 | P11 | 竞赛申报材料 | ❌ 待准备 |
 | P12 | 硬件联调 | ❌ 需硬件 |
