@@ -1,4 +1,4 @@
-# π RuView — 基于 WiFi 6 CSI 的极端条件人员监护系统
+﻿# WCES — 基于 WiFi 6 CSI 的极端条件人员监护系统
 
 > 第九届全国大学生嵌入式芯片与系统设计竞赛 · 瑞萨赛道
 > 硬件: 瑞萨 RZ/V2H + 3× ESP32-C5-DevKitC-1-N8R8
@@ -12,7 +12,7 @@
 ```
                   ┌──────────────────┐
                   │  TP-Link 千兆路由 │  (192.168.1.0/24)
-                  │  SSID: RuView    │
+                  │  SSID: WCES    │
                   └──┬────┬────┬─────┘
                      │    │    │
           ┌──────────┼────┼────┼──────────┐
@@ -37,7 +37,7 @@ python provision.py --chip esp32c5 --node-id 3 --port COM5
 
 # 2. RZ/V2H 上启动服务
 ssh root@192.168.1.1
-cd /opt/ruview
+cd /opt/WCES
 ./deploy.sh
 
 # 3. 浏览器打开仪表盘

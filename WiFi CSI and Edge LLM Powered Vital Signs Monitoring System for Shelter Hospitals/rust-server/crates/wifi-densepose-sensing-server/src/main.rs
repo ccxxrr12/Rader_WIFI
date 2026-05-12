@@ -1,4 +1,4 @@
-//! WiFi-DensePose Sensing Server
+﻿//! WiFi-DensePose Sensing Server
 //!
 //! Lightweight Axum server that:
 //! - Receives ESP32 CSI frames via UDP (port 5005)
@@ -2417,7 +2417,7 @@ async fn sona_activate(
 async fn info_page() -> Html<String> {
     Html(format!(
         "<html><body>\
-         <h1>π RuView — WiFi-DensePose Sensing Server</h1>\
+         <h1>WCES — WiFi-DensePose Sensing Server</h1>\
          <p>Rust + Axum + RuVector | 模拟模式运行中</p>\
          <ul>\
          <li><a href='/ui/triage.html'><strong>/ui/triage.html</strong></a> —<strong>分诊仪表盘 (竞赛核心)</strong></li>\

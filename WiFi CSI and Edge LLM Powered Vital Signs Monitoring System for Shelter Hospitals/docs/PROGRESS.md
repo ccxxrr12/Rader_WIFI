@@ -1,8 +1,7 @@
-# 竞赛项目构建进度 ✅
+# WCES 竞赛项目构建进度 ✅
 
-> 原始构建: 2026-05-06 17:10 | 审计修正: 2026-05-06 17:15
-> **阶段 2 修复 + MAT 集成**: 2026-05-09 08:30
-> 状态: **阶段 2 Cargo 编译通过 + MAT Pipeline 完整集成 ✅**
+> 项目：基于WIFI CSI感知与端侧LLM的方舱生命体征感知与监护系统
+> 缩写：WCES (WiFi CSI and Edge LLM Powered Vital Signs Monitoring System for Shelter Hospitals)
 
 ---
 

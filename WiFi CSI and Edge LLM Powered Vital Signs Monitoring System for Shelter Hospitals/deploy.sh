@@ -1,7 +1,7 @@
-#!/bin/bash
-# π RuView — 竞赛一键部署脚本
+﻿#!/bin/bash
+# WCES — 竞赛一键部署脚本
 # 在瑞萨 RZ/V2H 上运行, 启动所有服务
-# 使用: ssh root@192.168.1.1 && cd /opt/ruview && ./deploy.sh
+# 使用: ssh root@192.168.1.1 && cd /opt/WCES && ./deploy.sh
 
 set -e
 
@@ -11,7 +11,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${CYAN}========================================${NC}"
-echo -e "${CYAN}   π RuView — 竞赛系统部署             ${NC}"
+echo -e "${CYAN}   WCES — 竞赛系统部署             ${NC}"
 echo -e "${CYAN}   瑞萨 RZ/V2H + ESP32-C5 × 3          ${NC}"
 echo -e "${CYAN}========================================${NC}"
 echo ""
@@ -75,7 +75,7 @@ $SENSING_BIN \
     --ui-path "$UI_DIR" \
     --bind-addr 0.0.0.0 \
     --source auto \
-    > /tmp/ruview-server.log 2>&1 &
+    > /tmp/wces-server.log 2>&1 &
 
 SERVER_PID=$!
 echo -e "  ${GREEN}✓${NC} Server PID: $SERVER_PID"
@@ -88,7 +88,7 @@ check_http() {
     if curl -s -o /dev/null -w "%{http_code}" http://localhost:$HTTP_PORT/ > /dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} HTTP 服务 (端口 $HTTP_PORT)"
     else
-        echo -e "  ${RED}✗${NC} HTTP 服务无响应, 查看日志: tail /tmp/ruview-server.log"
+        echo -e "  ${RED}✗${NC} HTTP 服务无响应, 查看日志: tail /tmp/wces-server.log"
     fi
 }
 
@@ -118,7 +118,7 @@ echo -e "${CYAN}[5/5] 部署完成!${NC}"
 echo ""
 echo -e "  ${GREEN}▶${NC} 分诊仪表盘:  ${CYAN}http://localhost:$HTTP_PORT/ui/triage.html${NC}"
 echo -e "  ${GREEN}▶${NC} 3D 可视化:    ${CYAN}http://localhost:$HTTP_PORT${NC}"
-echo -e "  ${GREEN}▶${NC} 服务器日志:   ${CYAN}tail -f /tmp/ruview-server.log${NC}"
+echo -e "  ${GREEN}▶${NC} 服务器日志:   ${CYAN}tail -f /tmp/wces-server.log${NC}"
 echo -e "  ${GREEN}▶${NC} 停止服务:     ${CYAN}kill $SERVER_PID${NC}"
 echo ""
 echo -e "${CYAN}等待 ESP32-C5 节点发送 CSI 数据...${NC}"
