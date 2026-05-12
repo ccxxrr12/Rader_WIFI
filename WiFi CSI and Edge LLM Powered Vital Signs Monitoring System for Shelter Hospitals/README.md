@@ -2,7 +2,7 @@
 
 > 第九届全国大学生嵌入式芯片与系统设计竞赛 · 瑞萨赛道
 > 硬件：瑞萨 RZ/V2H + 3× ESP32-C5-DevKitC-1-N8R8
-> 状态：代码编译通过 ✅ | MAT 分诊集成 ✅ | 端侧 LLM 待实现 🔧
+> 状态：P0-P10a 完成 ✅ | MAT 分诊 + 10 边缘模块 + 模拟演示 | 端侧 LLM 待实现 🔧
 
 ---
 
@@ -31,26 +31,39 @@
 ### 一键启动
 
 ```bash
-# 1. 烧录固件 (每个节点修改 node_id)
+# 1. 烧录固件（每个节点修改 node_id）
 cd firmware/esp32-c5-csi-node
 python provision.py --chip esp32c5 --node-id 1 --port COM3
+# 节点 2: --node-id 2 --port COM4
+# 节点 3: --node-id 3 --port COM5
 
-# 2. RZ/V2H 上编译并启动服务
-cd rust-server && cargo build --release
-# 或交叉编译: cargo build --target aarch64-unknown-linux-gnu --release
+# 2. 编译服务端（在 rust-server 目录内）
+cd rust-server
+cargo build --release
+# RZ/V2H 交叉编译：
+# cargo build --target aarch64-unknown-linux-gnu --release
+
+# 3. 返回项目根目录，一键部署
+cd ..
 ./deploy.sh
 
-# 3. 浏览器打开仪表盘
+# 4. 浏览器打开仪表盘
 # http://192.168.1.1:8080/ui/triage.html    ← 分诊仪表盘
-# http://192.168.1.1:8080/ui/index.html     ← 3D 可视化
+# http://192.168.1.1:8080/                  ← 3D 可视化
 ```
 
 ### 无硬件模拟运行（开发/演示）
 
 ```bash
 cd rust-server
-cargo run -- --source simulate
-# 浏览器打开 http://localhost:8080/ui/triage.html
+cargo run -p wifi-densepose-sensing-server -- \
+    --source simulate \
+    --ui-path ../../docs/triage-ui \
+    --bind-addr 0.0.0.0 \
+    --http-port 8080
+
+# 浏览器打开 http://localhost:8080/triage.html
+# 即可看到完整分诊仪表盘（伤员地图 + 生命体征 + START 分诊 + 边缘模块告警）
 ```
 
 ---
