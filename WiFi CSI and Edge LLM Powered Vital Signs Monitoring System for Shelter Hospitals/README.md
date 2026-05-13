@@ -56,11 +56,7 @@ cd ..
 
 ```bash
 cd rust-server
-cargo run -p wifi-densepose-sensing-server -- \
-    --source simulate \
-    --ui-path ../docs/triage-ui \
-    --bind-addr 0.0.0.0 \
-    --http-port 8080
+cargo run -p wifi-densepose-sensing-server -- --source simulate --ui-path ../docs/triage-ui --bind-addr 0.0.0.0 --http-port 8080
 
 # 浏览器打开 http://localhost:8080/ui/triage.html
 # 即可看到完整分诊仪表盘（伤员地图 + 生命体征 + START 分诊 + 边缘模块告警）

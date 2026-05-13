@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WCES - 方舱生命体征监测系统</title>
     <!-- Three.js Library -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/controls/OrbitControls.js"></script>
     <style>
         * {
             margin: 0;
@@ -121,6 +121,10 @@
             background: var(--success-green);
             box-shadow: 0 0 8px rgba(52, 199, 89, 0.6);
             animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.offline {
+            background: var(--danger-red);
         }
 
         @keyframes pulse {
@@ -1223,17 +1227,23 @@
             const container = document.getElementById('skeletonContainer');
             const canvasEl = document.getElementById('skeletonCanvas');
             
+            // Fallback dimensions (container may be 0x0 before reflow)
+            const w = container.clientWidth || 700;
+            const h = container.clientHeight || 550;
+            console.log('[init3D] container size:', container.clientWidth, 'x', container.clientHeight, '-> using', w, 'x', h);
+            console.log('[init3D] THREE loaded:', typeof THREE !== 'undefined', 'OrbitControls:', typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined');
+            
+            if (typeof THREE === 'undefined') {
+                console.error('[init3D] THREE.js not loaded!');
+                return;
+            }
+            
             // Scene
             scene = new THREE.Scene();
             scene.background = new THREE.Color(COLORS.background);
             
             // Camera
-            camera = new THREE.PerspectiveCamera(
-                50, 
-                container.clientWidth / container.clientHeight, 
-                0.1, 
-                1000
-            );
+            camera = new THREE.PerspectiveCamera(50, w / Math.max(h, 1), 0.1, 1000);
             camera.position.set(0, 1.2, 4);
             
             // Renderer
@@ -1242,8 +1252,8 @@
                 antialias: true,
                 alpha: true
             });
-            renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(w, h);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             
@@ -1438,18 +1448,12 @@
         function animate() {
             requestAnimationFrame(animate);
             
-            if (currentView === 'skeleton') {
-                animationTime += 0.016;
-                
-                // Animate the skeleton
-                animatePose(animationTime);
-                
-                // Update controls
-                controls.update();
-                
-                // Render
-                renderer.render(scene, camera);
-            }
+            if (currentView !== 'skeleton' || !renderer) return;
+            
+            animationTime += 0.016;
+            animatePose(animationTime);
+            if (controls) controls.update();
+            renderer.render(scene, camera);
         }
         
         function onWindowResize() {
@@ -1473,11 +1477,18 @@
             document.getElementById('skeletonControls').style.display = view === 'skeleton' ? 'flex' : 'none';
             
             if (view === 'skeleton') {
-                if (!scene) {
-                    init3D();
-                } else {
-                    onWindowResize();
-                }
+                // Double-rAF ensures browser completes layout after display:none -> block
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        if (!scene) {
+                            init3D();
+                            // Re-resize after one more frame to catch final dimensions
+                            requestAnimationFrame(() => onWindowResize());
+                        } else {
+                            onWindowResize();
+                        }
+                    });
+                });
             } else {
                 drawMap();
             }
@@ -1519,12 +1530,30 @@
         }
 
         // ==================== Data Rendering ====================
+        let lastRenderHash = '';
+        function getDataHash() {
+            const p = [];
+            if (latestTriage) {
+                const a = latestTriage.assessment;
+                p.push(a.total, a.immediate, a.delayed, a.minor, a.deceased, a.severity, a.rescuer_estimate);
+                latestTriage.survivors?.forEach(s => p.push(s.id, s.breathing_rate, s.heart_rate, s.triage_color, s.is_deteriorating));
+                latestTriage.alerts?.forEach(a => p.push(a.survivor_id, a.message, a.priority));
+            }
+            latestData?.wasm_alerts?.forEach(a => p.push(a.module, a.event_name, a.value));
+            return p.join('|');
+        }
+
         function renderFromServer() {
             if (!latestTriage) return;
-            
+
+            // Skip re-render if data unchanged (prevents flickering)
+            const hash = getDataHash();
+            const changed = hash !== lastRenderHash;
+            lastRenderHash = hash;
+
             const assessment = latestTriage.assessment;
             
-            // Update stats
+            // Update stats (always - lightweight textContent)
             document.getElementById('statTotal').textContent = assessment.total;
             document.getElementById('statRed').textContent = assessment.immediate;
             document.getElementById('statYellow').textContent = assessment.delayed;
@@ -1535,6 +1564,7 @@
             document.getElementById('severityText').textContent = `伤情等级: ${assessment.severity}`;
             document.getElementById('rescuerText').textContent = `建议救援人员: ${assessment.rescuer_estimate} 人`;
 
+            if (changed) {
             // Update survivors list
             const survivorsList = document.getElementById('survivorsList');
             if (!latestTriage.survivors || latestTriage.survivors.length === 0) {
@@ -1619,8 +1649,9 @@
                     </div>
                 `;
             }
+            } // end changed
 
-            // Update current vitals
+            // Update current vitals (lightweight - always)
             if (latestData && latestData.vital_signs) {
                 document.getElementById('currentBreathing').textContent = 
                     latestData.vital_signs.breathing_rate_bpm?.toFixed(0) ?? '--';
@@ -1708,6 +1739,8 @@
         }
 
         // ==================== Init ====================
+        console.log('[Init] THREE:', typeof THREE !== 'undefined' ? 'v'+THREE.REVISION : 'MISSING',
+            '| OrbitControls:', typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined');
         updateTime();
         setInterval(updateTime, 1000);
         drawMap();
