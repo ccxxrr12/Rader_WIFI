@@ -54,7 +54,22 @@ name = "相干性门控"
 description = "CSI信号质量评估, 过滤低质量帧"
 enabled = true
 
-# ── 竞赛排除模块 (55个) ──
+[module.occupancy]
+name = "空间人数统计"
+description = "将感知区域划分为空间分区, 实时检测各区域占用状态"
+enabled = true
+
+[module.sig_mincut_person_match]
+name = "多人CSI身份匹配"
+description = "贪心匈牙利匹配器, 保持多人跨帧ID稳定 (<10ms)"
+enabled = true
+
+[module.sec_weapon_detect]
+name = "暴力/武器检测"
+description = "基于CSI幅相方差比检测金属异物/武器 (<5ms)"
+enabled = true
+
+# ── 竞赛排除模块 (52个) ──
 # 以下模块为商业/实验/非医疗用途, 竞赛不编译:
 # - ais_*.rs          AI安全 (2个)
 # - exo_*.rs          实验性功能 (11个): ghost_hunter, music_conductor, plant_growth等

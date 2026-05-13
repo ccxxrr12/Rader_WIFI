@@ -64,6 +64,60 @@ impl<const N: usize> RingBuf<N> {
 // Main Engine
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Module 11-13 state structs ──────────────────────────────────────────────
+
+struct OccState {
+    baseline_var: [f32; 8],
+    score: [f32; 8],
+    occupied: u8,
+    prev_occupied: u8,
+    calib_sum: [f32; 8],
+    calib_count: u32,
+    calibrated: bool,
+    frame_count: u32,
+    n_zones: usize,
+}
+
+const MC_FEAT_DIM: usize = 8;
+const MC_MAX_PERSONS: usize = 4;
+const MC_UNASSIGNED: u8 = 255;
+
+struct McState {
+    signature: [[f32; MC_FEAT_DIM]; MC_MAX_PERSONS],
+    active: u8,
+    tracked: [u16; MC_MAX_PERSONS],
+    absent: [u16; MC_MAX_PERSONS],
+    person_id: [u8; MC_MAX_PERSONS],
+    prev_assign: [u8; MC_MAX_PERSONS],
+    frame_count: u32,
+    swap_count: u32,
+}
+
+const WD_MAX_SC: usize = 32;
+
+struct WdState {
+    baseline_amp_var: [f32; WD_MAX_SC],
+    baseline_phase_var: [f32; WD_MAX_SC],
+    cal_amp_sum: [f32; WD_MAX_SC],
+    cal_amp_sq_sum: [f32; WD_MAX_SC],
+    cal_phase_sum: [f32; WD_MAX_SC],
+    cal_phase_sq_sum: [f32; WD_MAX_SC],
+    cal_count: u32,
+    calibrated: bool,
+    run_amp_mean: [f32; WD_MAX_SC],
+    run_amp_m2: [f32; WD_MAX_SC],
+    run_phase_mean: [f32; WD_MAX_SC],
+    run_phase_m2: [f32; WD_MAX_SC],
+    run_count: u32,
+    metal_run: u8,
+    weapon_run: u8,
+    cd_metal: u16,
+    cd_weapon: u16,
+    cd_recalib: u16,
+    frame_count: u32,
+}
+
+
 pub struct EdgeModuleEngine {
     // Module 1: vital_trend — 生命体征趋势
     vt_br: RingBuf<300>,      // breathing rate history (5 min @ 1Hz)
@@ -121,6 +175,15 @@ pub struct EdgeModuleEngine {
     intr_baseline: [f32; 32], intr_baseline_set: bool,
     intr_baseline_frames: u32, intr_armed: bool,
     intr_detect_ctr: u8, intr_cooldown: u16,
+
+    // Module 11: occupancy — 空间人数统计
+    oc: OccState,
+
+    // Module 12: sig_mincut — 多人CSI身份匹配
+    mc: McState,
+
+    // Module 13: sec_weapon_detect — 暴力/武器检测
+    wd: WdState,
 }
 
 impl EdgeModuleEngine {
@@ -152,6 +215,35 @@ impl EdgeModuleEngine {
             intr_baseline: [0.0; 32], intr_baseline_set: false,
             intr_baseline_frames: 0, intr_armed: false,
             intr_detect_ctr: 0, intr_cooldown: 0,
+            oc: OccState {
+                baseline_var: [0.0; 8], score: [0.0; 8],
+                occupied: 0, prev_occupied: 0,
+                calib_sum: [0.0; 8], calib_count: 0, calibrated: false,
+                frame_count: 0, n_zones: 0,
+            },
+            mc: McState {
+                signature: [[0.0; MC_FEAT_DIM]; MC_MAX_PERSONS],
+                active: 0, tracked: [0; MC_MAX_PERSONS], absent: [0; MC_MAX_PERSONS],
+                person_id: [0; MC_MAX_PERSONS], prev_assign: [MC_UNASSIGNED; MC_MAX_PERSONS],
+                frame_count: 0, swap_count: 0,
+            },
+            wd: WdState {
+                baseline_amp_var: [0.0; WD_MAX_SC],
+                baseline_phase_var: [0.0; WD_MAX_SC],
+                cal_amp_sum: [0.0; WD_MAX_SC],
+                cal_amp_sq_sum: [0.0; WD_MAX_SC],
+                cal_phase_sum: [0.0; WD_MAX_SC],
+                cal_phase_sq_sum: [0.0; WD_MAX_SC],
+                cal_count: 0, calibrated: false,
+                run_amp_mean: [0.0; WD_MAX_SC],
+                run_amp_m2: [0.0; WD_MAX_SC],
+                run_phase_mean: [0.0; WD_MAX_SC],
+                run_phase_m2: [0.0; WD_MAX_SC],
+                run_count: 0,
+                metal_run: 0, weapon_run: 0,
+                cd_metal: 0, cd_weapon: 0, cd_recalib: 0,
+                frame_count: 0,
+            },
         }
     }
 
@@ -517,6 +609,328 @@ impl EdgeModuleEngine {
             }
         }
 
+
+        // ── Module 11: occupancy ───────────────────────────────────────
+        // Divide subcarriers into zones (groups of ~4), track per-zone variance deviation
+        self.oc.frame_count += 1;
+        if n >= 2 {
+            let zone_count = ((n / 4).min(8)).max(1);
+            self.oc.n_zones = zone_count;
+            let subs_per_zone = n / zone_count;
+
+            // Compute per-zone amplitude variance
+            let mut zone_vars = [0.0f32; 8];
+            for z in 0..zone_count {
+                let start = z * subs_per_zone;
+                let end = if z == zone_count - 1 { n } else { start + subs_per_zone };
+                let cnt = (end - start) as f32;
+                if cnt < 1.0 { continue; }
+                let mean = amplitudes[start..end].iter().sum::<f32>() / cnt;
+                let var = amplitudes[start..end].iter().map(|a| (a - mean).powi(2)).sum::<f32>() / cnt;
+                zone_vars[z] = var;
+            }
+
+            // Calibration
+            if !self.oc.calibrated {
+                for z in 0..zone_count { self.oc.calib_sum[z] += zone_vars[z]; }
+                self.oc.calib_count += 1;
+                if self.oc.calib_count >= 200 {
+                    let nf = self.oc.calib_count as f32;
+                    for z in 0..zone_count { self.oc.baseline_var[z] = self.oc.calib_sum[z] / nf; }
+                    self.oc.calibrated = true;
+                }
+            } else {
+                // Score zones
+                self.oc.prev_occupied = self.oc.occupied;
+                let mut total = 0u8;
+                for z in 0..zone_count {
+                    let deviation = (zone_vars[z] - self.oc.baseline_var[z]).abs();
+                    let raw = if self.oc.baseline_var[z] > 0.001 {
+                        deviation / self.oc.baseline_var[z]
+                    } else { deviation * 100.0 };
+                    self.oc.score[z] = 0.15 * raw + 0.85 * self.oc.score[z];
+                    let was = (self.oc.occupied >> z) & 1;
+                    let now = if was == 1 {
+                        self.oc.score[z] > 0.01  // hysteresis: lower exit threshold
+                    } else {
+                        self.oc.score[z] > 0.02   // entry threshold
+                    };
+                    if now {
+                        self.oc.occupied |= 1 << z;
+                        total += 1;
+                    } else {
+                        self.oc.occupied &= !(1 << z);
+                    }
+                }
+                // Zone count event every 10 frames
+                if self.oc.frame_count % 10 == 0 {
+                    if total > 0 && n > 0 {
+                        alerts.push(EdgeAlert { module: "occupancy".into(), event_type: 301,
+                            event_name: "ZoneCount".into(), value: total as f32,
+                            severity: "info".into() });
+                    }
+                    for z in 0..zone_count {
+                        if ((self.oc.occupied >> z) & 1) == 1 {
+                            let conf = self.oc.score[z].min(0.99);
+                            alerts.push(EdgeAlert { module: "occupancy".into(), event_type: 300,
+                                event_name: "ZoneOccupied".into(), value: z as f32 + conf,
+                                severity: "info".into() });
+                        }
+                    }
+                }
+                // Transition events
+                let changed = self.oc.occupied ^ self.oc.prev_occupied;
+                for z in 0..zone_count {
+                    if (changed >> z) & 1 == 1 {
+                        let entering = ((self.oc.occupied >> z) & 1) == 1;
+                        alerts.push(EdgeAlert { module: "occupancy".into(), event_type: 302,
+                            event_name: if entering { "ZoneEntered".into() } else { "ZoneLeft".into() },
+                            value: z as f32, severity: "info".into() });
+                    }
+                }
+            }
+        }
+
+        // ── Module 12: sig_mincut_person_match ─────────────────────────
+        if n >= MC_FEAT_DIM {
+            let n_persons = if presence { 1usize } else { 0usize }; // at least 1 if breathing detected
+            let n_det = match () {
+                _ if br > 0.0 => 1,
+                _ => n_persons,
+            };
+            let n_det = n_det.min(MC_MAX_PERSONS);
+
+            // Compute per-subcarrier variance (simple estimate from consecutive diffs)
+            // Use amplitude variance as proxy for per-subcarrier features
+            let sc_var: Vec<f32> = amplitudes[..n].iter()
+                .map(|&a| (a - amp_mean).abs())  // simplified feature
+                .collect();
+
+            if n_det > 0 {
+                self.mc.frame_count += 1;
+
+                // Extract top-8 variance features per detected person
+                let mut cur_feat = [[0.0f32; MC_FEAT_DIM]; MC_MAX_PERSONS];
+                let subs = n / n_det;
+                for p in 0..n_det {
+                    let start = p * subs;
+                    let end = if p == n_det - 1 { n } else { start + subs };
+                    // Select top-8 highest variance subcarriers in this region
+                    let mut vals: Vec<(usize, f32)> = (start..end).map(|i| (i, sc_var[i])).collect();
+                    vals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    for f in 0..MC_FEAT_DIM.min(vals.len()) {
+                        cur_feat[p][f] = vals[f].1;
+                    }
+                    for f in MC_FEAT_DIM.min(vals.len())..MC_FEAT_DIM {
+                        cur_feat[p][f] = 0.0;
+                    }
+                }
+
+                // Greedy Hungarian-lite assignment
+                let mut assign = [MC_UNASSIGNED; MC_MAX_PERSONS];
+                let mut costs = [0.0f32; MC_MAX_PERSONS];
+                {
+                    let mut det_used = [false; MC_MAX_PERSONS];
+                    let mut slot_used = [false; MC_MAX_PERSONS];
+                    let n_active = (0..MC_MAX_PERSONS).filter(|&s| (self.mc.active >> s) & 1 == 1).count();
+                    for _ in 0..n_det.min(n_active.max(1)) {
+                        let (mut min_c, mut best_d, mut best_s) = (f32::MAX, 0usize, 0usize);
+                        for d in 0..n_det {
+                            if det_used[d] { continue; }
+                            for s in 0..MC_MAX_PERSONS {
+                                if slot_used[s] || (self.mc.active >> s) & 1 == 0 { continue; }
+                                let dist = l2mc(&cur_feat[d], &self.mc.signature[s]);
+                                if dist < min_c { min_c = dist; best_d = d; best_s = s; }
+                            }
+                        }
+                        if min_c > 5.0 { break; }
+                        assign[best_d] = best_s as u8;
+                        costs[best_d] = min_c;
+                        det_used[best_d] = true;
+                        slot_used[best_s] = true;
+                    }
+                    // Assign unmatched to free slots
+                    for d in 0..n_det {
+                        if assign[d] != MC_UNASSIGNED { continue; }
+                        for s in 0..MC_MAX_PERSONS {
+                            if !slot_used[s] && (self.mc.active >> s) & 1 == 0 {
+                                assign[d] = s as u8; costs[d] = 5.0;
+                                slot_used[s] = true; break;
+                            }
+                        }
+                        if assign[d] != MC_UNASSIGNED { continue; }
+                        for s in 0..MC_MAX_PERSONS {
+                            if !slot_used[s] {
+                                assign[d] = s as u8; costs[d] = 5.0;
+                                slot_used[s] = true; break;
+                            }
+                        }
+                    }
+                }
+
+                // Detect ID swaps
+                for d in 0..n_det {
+                    if assign[d] != MC_UNASSIGNED && self.mc.prev_assign[d] != MC_UNASSIGNED
+                        && assign[d] != self.mc.prev_assign[d] {
+                        self.mc.swap_count += 1;
+                        alerts.push(EdgeAlert { module: "mincut".into(), event_type: 721,
+                            event_name: "PersonIDSwap".into(),
+                            value: self.mc.prev_assign[d] as f32 * 16.0 + assign[d] as f32,
+                            severity: "warning".into() });
+                    }
+                }
+
+                // Update signatures (EMA) and emit assignment events
+                for s in 0..MC_MAX_PERSONS {
+                    if (self.mc.active >> s) & 1 == 1 {
+                        self.mc.absent[s] = self.mc.absent[s].saturating_add(1);
+                    }
+                }
+                for d in 0..n_det {
+                    let s = assign[d] as usize;
+                    if s >= MC_MAX_PERSONS { continue; }
+                    let was_active = (self.mc.active >> s) & 1 == 1;
+                    if was_active {
+                        for f in 0..MC_FEAT_DIM {
+                            self.mc.signature[s][f] = 0.15 * cur_feat[d][f] + 0.85 * self.mc.signature[s][f];
+                        }
+                        self.mc.tracked[s] = self.mc.tracked[s].saturating_add(1);
+                    } else {
+                        self.mc.signature[s] = cur_feat[d];
+                        self.mc.active |= 1 << s;
+                        self.mc.tracked[s] = 1;
+                    }
+                    self.mc.absent[s] = 0;
+                    let conf = if costs[d] < 5.0 { 1.0 - costs[d] / 5.0 } else { 0.0 };
+                    alerts.push(EdgeAlert { module: "mincut".into(), event_type: 720,
+                        event_name: "PersonAssigned".into(),
+                        value: self.mc.person_id[s] as f32 + conf.min(0.99) * 0.01,
+                        severity: "info".into() });
+                }
+
+                // Timeout absent slots
+                for s in 0..MC_MAX_PERSONS {
+                    if self.mc.absent[s] >= 100 {
+                        self.mc.active &= !(1 << s);
+                        self.mc.tracked[s] = 0;
+                        self.mc.absent[s] = 0;
+                        self.mc.signature[s] = [0.0; MC_FEAT_DIM];
+                    }
+                }
+
+                // Aggregate confidence every 10 frames
+                if self.mc.frame_count % 10 == 0 && n_det > 0 {
+                    let avg = costs.iter().take(n_det)
+                        .map(|&c| if c < 5.0 { 1.0 - c / 5.0 } else { 0.0f32 })
+                        .sum::<f32>() / n_det as f32;
+                    alerts.push(EdgeAlert { module: "mincut".into(), event_type: 722,
+                        event_name: "MatchConfidence".into(), value: avg,
+                        severity: "info".into() });
+                }
+                self.mc.prev_assign = assign;
+            }
+        }
+
+        // ── Module 13: sec_weapon_detect ────────────────────────────────
+        self.wd.frame_count += 1;
+        self.wd.cd_metal = self.wd.cd_metal.saturating_sub(1);
+        self.wd.cd_weapon = self.wd.cd_weapon.saturating_sub(1);
+        self.wd.cd_recalib = self.wd.cd_recalib.saturating_sub(1);
+
+        if n >= 2 {
+            // Calibration phase
+            if !self.wd.calibrated {
+                for i in 0..n.min(WD_MAX_SC) {
+                    self.wd.cal_amp_sum[i] += amplitudes[i];
+                    self.wd.cal_amp_sq_sum[i] += amplitudes[i] * amplitudes[i];
+                    self.wd.cal_phase_sum[i] += phases[i];
+                    self.wd.cal_phase_sq_sum[i] += phases[i] * phases[i];
+                }
+                self.wd.cal_count += 1;
+                if self.wd.cal_count >= 100 {
+                    let nf = self.wd.cal_count as f32;
+                    for i in 0..n.min(WD_MAX_SC) {
+                        let am = self.wd.cal_amp_sum[i] / nf;
+                        self.wd.baseline_amp_var[i] =
+                            (self.wd.cal_amp_sq_sum[i] / nf - am * am).max(0.001);
+                        let pm = self.wd.cal_phase_sum[i] / nf;
+                        self.wd.baseline_phase_var[i] =
+                            (self.wd.cal_phase_sq_sum[i] / nf - pm * pm).max(0.001);
+                    }
+                    self.wd.calibrated = true;
+                }
+            } else {
+                // Welford online variance
+                self.wd.run_count += 1;
+                let rc = self.wd.run_count as f32;
+                for i in 0..n.min(WD_MAX_SC) {
+                    let da = amplitudes[i] - self.wd.run_amp_mean[i];
+                    self.wd.run_amp_mean[i] += da / rc;
+                    let da2 = amplitudes[i] - self.wd.run_amp_mean[i];
+                    self.wd.run_amp_m2[i] += da * da2;
+
+                    let dp = phases[i] - self.wd.run_phase_mean[i];
+                    self.wd.run_phase_mean[i] += dp / rc;
+                    let dp2 = phases[i] - self.wd.run_phase_mean[i];
+                    self.wd.run_phase_m2[i] += dp * dp2;
+                }
+
+                // Only detect with presence AND motion
+                if presence && motion_energy >= 0.5 && self.wd.run_count >= 4 {
+                    let (mut ratio_sum, mut valid_sc) = (0.0f32, 0u32);
+                    let mut max_drift = 0.0f32;
+                    for i in 0..n.min(WD_MAX_SC) {
+                        let av = self.wd.run_amp_m2[i] / (self.wd.run_count as f32 - 1.0);
+                        let pv = self.wd.run_phase_m2[i] / (self.wd.run_count as f32 - 1.0);
+                        if pv > 0.0001 { ratio_sum += av / pv; valid_sc += 1; }
+                        let drift = if self.wd.baseline_amp_var[i] > 0.0001 {
+                            (av - self.wd.baseline_amp_var[i]).abs() / self.wd.baseline_amp_var[i]
+                        } else { 0.0 };
+                        if drift > max_drift { max_drift = drift; }
+                    }
+                    if valid_sc >= 2 {
+                        let mean_ratio = ratio_sum / valid_sc as f32;
+
+                        // Recalibration alert
+                        if max_drift > 3.0 && self.wd.cd_recalib == 0 {
+                            self.wd.cd_recalib = 300;
+                            alerts.push(EdgeAlert { module: "weapon_detect".into(), event_type: 222,
+                                event_name: "CalibrationNeeded".into(), value: max_drift,
+                                severity: "warning".into() });
+                        }
+
+                        // Metal anomaly
+                        if mean_ratio > 4.0 { self.wd.metal_run = self.wd.metal_run.saturating_add(1); }
+                        else { self.wd.metal_run = self.wd.metal_run.saturating_sub(1); }
+                        if self.wd.metal_run >= 4 && self.wd.cd_metal == 0 {
+                            self.wd.cd_metal = 60;
+                            alerts.push(EdgeAlert { module: "weapon_detect".into(), event_type: 220,
+                                event_name: "MetalAnomaly".into(), value: mean_ratio,
+                                severity: "warning".into() });
+                        }
+
+                        // Weapon alert
+                        if mean_ratio > 8.0 { self.wd.weapon_run = self.wd.weapon_run.saturating_add(1); }
+                        else { self.wd.weapon_run = self.wd.weapon_run.saturating_sub(1); }
+                        if self.wd.weapon_run >= 6 && self.wd.cd_weapon == 0 {
+                            self.wd.cd_weapon = 60;
+                            alerts.push(EdgeAlert { module: "weapon_detect".into(), event_type: 221,
+                                event_name: "WeaponAlert".into(), value: mean_ratio,
+                                severity: "critical".into() });
+                        }
+                    }
+                }
+                // Reset running stats periodically when no one is present
+                if !presence && self.wd.run_count > 200 {
+                    self.wd.run_count = 0;
+                    for i in 0..WD_MAX_SC {
+                        self.wd.run_amp_mean[i] = 0.0; self.wd.run_amp_m2[i] = 0.0;
+                        self.wd.run_phase_mean[i] = 0.0; self.wd.run_phase_m2[i] = 0.0;
+                    }
+                }
+            }
+        }
+
         alerts
     }
 
@@ -530,6 +944,13 @@ impl EdgeModuleEngine {
 // ══════════════════════════════════════════════════════════════════════════════
 // Math helpers
 // ══════════════════════════════════════════════════════════════════════════════
+
+/// L2 distance for mincut person match (8-dim feature vectors)
+fn l2mc(a: &[f32; 8], b: &[f32; 8]) -> f32 {
+    let mut sum = 0.0f32;
+    for i in 0..8 { let d = a[i] - b[i]; sum += d * d; }
+    sum.sqrt()
+}
 
 fn euclid_4(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     ((a[0]-b[0]).powi(2) + (a[1]-b[1]).powi(2) + (a[2]-b[2]).powi(2) + (a[3]-b[3]).powi(2)).sqrt()

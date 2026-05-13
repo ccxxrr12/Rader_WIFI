@@ -112,6 +112,10 @@ cargo check  → ✅ 编译通过
 
 **编译结果**: `cargo check` ✅ 0 errors
 
+### 2.8 边缘模块引擎集成 (2026-05-12 → 2026-05-13 扩展)
+
+> **2026-05-13 扩展**: 从基座项目集成 3 个新模块 → 总计 13 个（见下方 2.8a）
+
 ### 2.8 边缘模块引擎集成 (2026-05-12)
 
 将 10 个 WASM 边缘模块以原生 Rust 编译到 sensing-server，在模拟/硬件双管道中统一运行：
@@ -128,6 +132,9 @@ cargo check  → ✅ 编译通过
 | 8 | med_cardiac_arrhythmia | 心律失常 (心动过速/过缓/漏搏/HRV异常) | 110-113 |
 | 9 | med_seizure_detect | 癫痫发作 (强直/阵挛/发作后) | 140-143 |
 | 10 | intrusion | 入侵检测 (基线校准/布防/触发) | 200-203 |
+| 11 | occupancy | 空间人数统计 (8分区校准/占用检测/过渡事件) | 300-302 |
+| 12 | sig_mincut_person_match | 多人CSI身份匹配 (贪心匈牙利+EMA签名+ID交换检测) | 720-722 |
+| 13 | sec_weapon_detect | 暴力/武器检测 (Welford在线方差+幅相比+金属/武器告警) | 220-222 |
 
 **实现方式**: 精简实现核心算法（~500行 Rust），不依赖 WASM 编译目标。
 每个模块以独立逻辑块运行，产生 `EdgeAlert` 事件，通过 `SensingUpdate.wasm_alerts` 推送到 triage.html。
@@ -137,6 +144,30 @@ cargo check  → ✅ 编译通过
 - `sensing-server/src/main.rs`: +22 行（AppState + 双管道调用 + SensingUpdate 字段）
 - `docs/triage-ui/triage.html`: +20 行（WASM 告警渲染）
 - `docs/PROGRESS.md`: 本条目
+
+### 2.8a 边缘模块扩展 (2026-05-13): 13个模块
+
+从基座项目(66个WASM模块)中精选3个与方舱场景高度相关的模块集成：
+
+| # | 模块 | 功能 | 事件ID |
+|---|------|------|:--:|
+| 11 | occupancy | 空间人数统计 (8分区: 校准→方差偏离→占用检测→过渡事件) | 300-302 |
+| 12 | sig_mincut_person_match | 多人CSI身份匹配 (贪心匈牙利分配+EMA签名+ID交换/超时) | 720-722 |
+| 13 | sec_weapon_detect | 暴力/武器检测 (Welford在线方差→幅相比→金属异常→武器告警) | 220-222 |
+
+**实现方式**: 在 edge_module_engine.rs 中精简实现核心算法（
+- occupancy: ~80行，8分区划分+校准+EMA评分+滞后阈值
+- mincut: ~120行，4人特征提取+贪心匹配+签名EMA+超时回收
+- weapon: ~90行，Welford方差+基线校准+幅相比检测+消抖
+
+**新增状态**: OccState(10字段), McState(9字段), WdState(19字段)
+**新增辅助**: l2mc() 8维特征距离
+**修改文件**:
+- `sensing-server/src/edge_module_engine.rs`: +380 行（状态+处理逻辑+辅助）
+- `competition/wasm-modules-competition.toml`: +12 行（3个新模块声明）
+- `docs/PROGRESS.md`: 本条目
+
+**编译结果**: `cargo check` ✅ 0 errors, 23 warnings
 
 ### 2.9 全项目审计 + 重命名 + 骨架模拟启用 (2026-05-12)
 
@@ -187,7 +218,7 @@ cargo check  → ✅ 编译通过
 | **P7** | **Cargo.toml 修复 + 编译通过** | ✅ **2026-05-09** |
 | **P8** | **MAT Pipeline 完整集成** | ✅ **2026-05-09** |
 | **P9** | **子载波选择 + 三角定位 + DensePose** | ✅ **2026-05-09** |
-| **P10a** | **WASM 边缘模块集成 (10个)** | ✅ **2026-05-12** |
+| **P10a** | **WASM 边缘模块集成 (13个)** | ✅ **2026-05-13** |
 | **P10b** | **全项目审计修复 + 重命名WCES + 骨架模拟启用** | ✅ **2026-05-12** |
 | P10 | 端侧 LLM 代码实现 | ❌ 待开发 |
 | P11 | 竞赛申报材料 | ❌ 待准备 |
