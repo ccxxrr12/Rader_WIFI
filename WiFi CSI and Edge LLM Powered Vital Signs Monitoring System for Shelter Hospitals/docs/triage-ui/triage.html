@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WCES - 方舱生命体征监测系统</title>
     <!-- Three.js Library -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/controls/OrbitControls.js"></script>
     <style>
         * {
             margin: 0;
@@ -987,14 +987,6 @@
                 </div>
             </div>
 
-            <!-- Skeleton Toggle -->
-            <div class="sidebar-section">
-                <div class="skeleton-toggle">
-                    <span class="toggle-label">3D 骨架可视化</span>
-                    <button class="toggle-btn" id="skelBtn" onclick="toggleSkeleton()">关闭</button>
-                </div>
-            </div>
-
             <!-- Survivors List -->
             <div class="sidebar-section">
                 <div class="section-header">
@@ -1049,42 +1041,49 @@
         
         let latestTriage = null;
         let latestData = null;
-        let skeletonEnabled = false;
         let showHeatmap = false;
+        let renderPending = false;
         let ws = null;
         let currentView = 'map';
         
         // 3D Skeleton State
         let scene, camera, renderer, controls;
-        let skeletonGroup;
         let autoRotate = true;
         let isWireframe = false;
         let animationTime = 0;
         
-        // Skeleton connections (26 points)
-        const SKELETON_CONNECTIONS = [
-            [0, 1], [0, 2], [1, 3], [2, 4],           // Head
-            [0, 25],                                    // Nose -> Neck
-            [25, 5], [25, 6],                           // Neck -> Shoulders
-            [5, 7], [7, 9],                             // Left arm
-            [6, 8], [8, 10],                            // Right arm
-            [5, 11], [6, 12],                           // Torso
-            [11, 12],                                   // Hips
-            [11, 13], [13, 15],                         // Left leg
-            [12, 14], [14, 16],                         // Right leg
-            [9, 17], [9, 18], [9, 19],                  // Left hand
-            [10, 20], [10, 21], [10, 22],               // Right hand
-            [15, 23], [16, 24]                          // Feet
+        // ==================== 3D Skeleton ====================
+        // 17-point COCO keypoint connectivity
+        const SKELETON_PAIRS = [
+            [0,1],[0,2],[1,3],[2,4],        // head
+            [5,6],[5,7],[7,9],[6,8],[8,10], // arms
+            [5,11],[6,12],[11,12],          // torso
+            [11,13],[13,15],[12,14],[14,16] // legs
         ];
         
-        // Colors
-        const COLORS = {
-            joint: 0x00d878,
-            limb: 0x3eff8a,
-            head: 0x00e5ff,
-            spine: 0x5856d6,
-            background: 0x0f0f10
-        };
+        // Body segment definitions for volumetric rendering
+        const BODY_SEGMENTS = [
+            {joints:[5,11],rad:0.12},{joints:[6,12],rad:0.12},
+            {joints:[5,6],rad:0.10},{joints:[11,12],rad:0.10},
+            {joints:[5,7],rad:0.05},{joints:[6,8],rad:0.05},
+            {joints:[7,9],rad:0.04},{joints:[8,10],rad:0.04},
+            {joints:[11,13],rad:0.07},{joints:[12,14],rad:0.07},
+            {joints:[13,15],rad:0.05},{joints:[14,16],rad:0.05},
+            {joints:[0,0],rad:0.10,isHead:true}
+        ];
+        
+        // Bone thickness taper (thicker core, thinner extremities)
+        const BONE_TAPER = { '5-6':1.4,'11-12':1.3,'5-11':1.3,'6-12':1.3,
+            '5-7':1.0,'6-8':1.0,'11-13':1.1,'12-14':1.1,
+            '7-9':0.7,'8-10':0.7,'13-15':0.8,'14-16':0.8,
+            '0-1':0.5,'0-2':0.5,'1-3':0.4,'2-4':0.4 };
+        
+        const COLORS = { joint:0x00d878, limb:0x3eff8a, head:0x00e5ff, spine:0x5856d6, background:0x0f0f10 };
+
+        // Smoothed pose state (per-person lerp targets)
+        let smoothedPoses = [];
+        const _vFrom = new THREE.Vector3();
+        const _vTo = new THREE.Vector3();
 
         // ==================== Canvas Map ====================
         const canvas = document.getElementById('map');
@@ -1226,240 +1225,293 @@
         function init3D() {
             const container = document.getElementById('skeletonContainer');
             const canvasEl = document.getElementById('skeletonCanvas');
-            
-            // Fallback dimensions (container may be 0x0 before reflow)
             const w = container.clientWidth || 700;
             const h = container.clientHeight || 550;
-            console.log('[init3D] container size:', container.clientWidth, 'x', container.clientHeight, '-> using', w, 'x', h);
-            console.log('[init3D] THREE loaded:', typeof THREE !== 'undefined', 'OrbitControls:', typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined');
+            console.log('[init3D] size:', w, 'x', h, '| THREE:', typeof THREE !== 'undefined' ? 'v'+THREE.REVISION : 'MISSING');
+            if (typeof THREE === 'undefined') { console.error('[init3D] THREE.js missing!'); return; }
             
-            if (typeof THREE === 'undefined') {
-                console.error('[init3D] THREE.js not loaded!');
-                return;
-            }
-            
-            // Scene
             scene = new THREE.Scene();
             scene.background = new THREE.Color(COLORS.background);
-            
-            // Camera
             camera = new THREE.PerspectiveCamera(50, w / Math.max(h, 1), 0.1, 1000);
             camera.position.set(0, 1.2, 4);
-            
-            // Renderer
-            renderer = new THREE.WebGLRenderer({ 
-                canvas: canvasEl, 
-                antialias: true,
-                alpha: true
-            });
+            renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
             renderer.setSize(w, h);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-            
-            // Controls
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
+            controls.dampingFactor = 0.08;
             controls.autoRotate = autoRotate;
             controls.autoRotateSpeed = 1.0;
-            controls.minDistance = 2;
-            controls.maxDistance = 10;
+            controls.minDistance = 1.5;
+            controls.maxDistance = 8;
             controls.target.set(0, 1, 0);
             
             // Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-            scene.add(ambientLight);
+            scene.add(new THREE.AmbientLight(0x334466, 0.6));
+            const key = new THREE.DirectionalLight(0x4488cc, 1.2);
+            key.position.set(3, 6, 5); key.castShadow = true; scene.add(key);
+            const fill = new THREE.DirectionalLight(0xff9966, 0.4);
+            fill.position.set(-3, 2, -3); scene.add(fill);
+            const rim = new THREE.DirectionalLight(0x3366ff, 0.5);
+            rim.position.set(0, 0, -4); scene.add(rim);
             
-            const mainLight = new THREE.DirectionalLight(0x007AFF, 0.8);
-            mainLight.position.set(5, 10, 7);
-            mainLight.castShadow = true;
-            scene.add(mainLight);
+            // Ground + grid
+            const ground = new THREE.Mesh(
+                new THREE.CircleGeometry(3, 32),
+                new THREE.MeshStandardMaterial({ color: 0x1C1C1E, metalness: 0.3, roughness: 0.8 })
+            );
+            ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+            scene.add(new THREE.GridHelper(4, 20, 0x38383A, 0x2C2C2E));
             
-            const fillLight = new THREE.DirectionalLight(0xFF9500, 0.3);
-            fillLight.position.set(-5, 5, -5);
-            scene.add(fillLight);
-            
-            // Ground plane
-            const groundGeometry = new THREE.CircleGeometry(3, 32);
-            const groundMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x1C1C1E,
-                metalness: 0.3,
-                roughness: 0.8
-            });
-            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-            ground.rotation.x = -Math.PI / 2;
-            ground.receiveShadow = true;
-            scene.add(ground);
-            
-            // Grid helper
-            const gridHelper = new THREE.GridHelper(4, 20, 0x38383A, 0x2C2C2E);
-            scene.add(gridHelper);
-            
-            // Create skeleton
-            createSkeleton();
-            
-            // Resize handler
+            // Create figure pool (up to 4 people)
+            createFigurePool();
             window.addEventListener('resize', onWindowResize);
-            
-            // Start animation
             animate();
         }
+
+        // ── Figure Pool (1-4 skeletons with body segments) ──
+        let figureGroups = [];
         
-        function createSkeleton() {
-            skeletonGroup = new THREE.Group();
-            scene.add(skeletonGroup);
-            
-            // Create joints (spheres)
-            const joints = [];
-            for (let i = 0; i < 26; i++) {
-                const geometry = new THREE.SphereGeometry(i < 5 ? 0.06 : 0.04, 16, 16);
-                const material = new THREE.MeshStandardMaterial({
-                    color: i < 5 ? COLORS.head : COLORS.joint,
-                    emissive: i < 5 ? COLORS.head : COLORS.joint,
-                    emissiveIntensity: 0.2,
-                    metalness: 0.5,
-                    roughness: 0.3
-                });
-                const joint = new THREE.Mesh(geometry, material);
-                joint.castShadow = true;
-                joint.userData.index = i;
-                joints.push(joint);
-                skeletonGroup.add(joint);
+        function createFigurePool() {
+            for (let p = 0; p < 4; p++) {
+                const group = new THREE.Group();
+                const joints = [], bones = [], segments = [];
+                
+                // 17 joints
+                for (let i = 0; i < 17; i++) {
+                    const r = (i >= 1 && i <= 4) ? 0.04 : (i >= 5 && i <= 6) ? 0.06 : 0.045;
+                    const geo = new THREE.SphereGeometry(r, 16, 16);
+                    const mat = new THREE.MeshStandardMaterial({
+                        color: (i >= 0 && i <= 4) ? COLORS.head : COLORS.joint,
+                        emissive: (i >= 0 && i <= 4) ? COLORS.head : COLORS.joint,
+                        emissiveIntensity: 0.25, metalness: 0.4, roughness: 0.3
+                    });
+                    const joint = new THREE.Mesh(geo, mat);
+                    joint.castShadow = true; joint.userData.index = i;
+                    joints.push(joint); group.add(joint);
+                }
+                
+                // Bones
+                for (const [a, b] of SKELETON_PAIRS) {
+                    const key = a + '-' + b;
+                    const taper = BONE_TAPER[key] || 0.8;
+                    const thickness = 0.022 * taper;
+                    const geo = new THREE.CylinderGeometry(thickness, thickness, 1, 8);
+                    const mat = new THREE.MeshStandardMaterial({
+                        color: COLORS.limb, emissive: COLORS.limb,
+                        emissiveIntensity: 0.15, metalness: 0.3, roughness: 0.5
+                    });
+                    const bone = new THREE.Mesh(geo, mat);
+                    bone.castShadow = true; bone.userData.jointA = a; bone.userData.jointB = b;
+                    bones.push(bone); group.add(bone);
+                }
+                
+                // Body segments (volumetric torso/limbs)
+                for (const seg of BODY_SEGMENTS) {
+                    const geo = seg.isHead ? new THREE.SphereGeometry(seg.rad, 16, 16) :
+                        new THREE.CylinderGeometry(seg.rad, seg.rad * 0.9, 1, 12);
+                    const mat = new THREE.MeshStandardMaterial({
+                        color: seg.isHead ? COLORS.head : COLORS.spine,
+                        emissive: seg.isHead ? COLORS.head : COLORS.spine,
+                        emissiveIntensity: 0.08, metalness: 0.2, roughness: 0.6, transparent: true, opacity: 0.7
+                    });
+                    const mesh = new THREE.Mesh(geo, mat);
+                    mesh.castShadow = true; mesh.receiveShadow = true;
+                    mesh.userData.jointA = seg.joints[0]; mesh.userData.jointB = seg.joints[1];
+                    mesh.userData.isHead = seg.isHead || false;
+                    segments.push(mesh); group.add(mesh);
+                }
+                
+                group.userData = { joints, bones, segments, smoothed: null };
+                group.visible = false;
+                scene.add(group);
+                figureGroups.push(group);
+                smoothedPoses.push(null);
             }
-            
-            // Create bones (cylinders between joints)
-            const bones = [];
-            for (const [i, j] of SKELETON_CONNECTIONS) {
-                const geometry = new THREE.CylinderGeometry(0.02, 0.02, 1, 8);
-                const material = new THREE.MeshStandardMaterial({
-                    color: COLORS.limb,
-                    emissive: COLORS.limb,
-                    emissiveIntensity: 0.15,
-                    metalness: 0.3,
-                    roughness: 0.5
-                });
-                const bone = new THREE.Mesh(geometry, material);
-                bone.castShadow = true;
-                bone.userData.jointA = i;
-                bone.userData.jointB = j;
-                bones.push(bone);
-                skeletonGroup.add(bone);
-            }
-            
-            // Store references
-            skeletonGroup.userData.joints = joints;
-            skeletonGroup.userData.bones = bones;
-            
-            // Initial pose (T-pose)
-            updateSkeletonPose(getDefaultPose());
         }
-        
-        function getDefaultPose() {
-            // Return 26-point pose in T-stance
+
+        // ── 17-point COCO Pose Generation (physics-based, matching Rust server) ──
+        function generatePose17(personIdx, tick, motionScore, breathAmp) {
+            const t = tick * 0.016;
+            const px = (personIdx - 1.5) * 0.8;  // spread people side to side
+            const pz = (personIdx % 2) * 0.6 - 0.3;
+            const bp = breathAmp * 0.015;
+            
+            // Determine walking or standing based on motion score
+            const walking = motionScore > 0.15;
+            const speed = Math.min(motionScore * 5, 2.0);
+            
+            if (walking) {
+                // ── Walking pose ──
+                const wp = t * speed * 8 + personIdx * 1.2;  // stagger phase per person
+                const sFactor = Math.min(speed, 1);
+                const legStrideL = Math.sin(wp) * 0.25 * sFactor;
+                const legStrideR = Math.sin(wp + Math.PI) * 0.25 * sFactor;
+                const kneeAmt = Math.abs(Math.sin(wp)) * 0.1;
+                const armSwingL = Math.sin(wp) * 0.28 * sFactor;
+                const armSwingR = -Math.sin(wp) * 0.28 * sFactor;
+                const elbendL = Math.max(0, Math.sin(wp)) * 0.1;
+                const elbendR = Math.max(0, -Math.sin(wp)) * 0.1;
+                const torsoTwist = Math.sin(wp) * 0.025;
+                const bob = Math.abs(Math.sin(wp)) * 0.025;
+                const headBob = Math.abs(Math.sin(wp - 0.2)) * 0.015;
+                
+                return [
+                    [px + Math.sin(wp) * 0.01, 1.72 + bp + bob + headBob, pz],
+                    [px - 0.03, 1.74 + bp + bob + headBob, pz - 0.02],
+                    [px + 0.03, 1.74 + bp + bob + headBob, pz - 0.02],
+                    [px - 0.07, 1.72 + bp + bob + headBob, pz],
+                    [px + 0.07, 1.72 + bp + bob + headBob, pz],
+                    [px - 0.22 - torsoTwist, 1.48 + bp + bob, pz],
+                    [px + 0.22 - torsoTwist, 1.48 + bp + bob, pz],
+                    [px - 0.28 + armSwingL * 0.3, 1.18 + bp + bob - elbendL, pz + armSwingL * 0.3],
+                    [px + 0.28 + armSwingR * 0.3, 1.18 + bp + bob - elbendR, pz + armSwingR * 0.3],
+                    [px - 0.26 + armSwingL * 0.6, 0.92 + bp + bob - elbendL * 1.5, pz + armSwingL * 0.5],
+                    [px + 0.26 + armSwingR * 0.6, 0.92 + bp + bob - elbendR * 1.5, pz + armSwingR * 0.5],
+                    [px - 0.11 + torsoTwist * 0.5, 0.98 + bp + bob, pz],
+                    [px + 0.11 + torsoTwist * 0.5, 0.98 + bp + bob, pz],
+                    [px - 0.12 + legStrideL * 0.3, 0.52 + kneeAmt, pz + legStrideL],
+                    [px + 0.12 + legStrideR * 0.3, 0.52 + kneeAmt, pz + legStrideR],
+                    [px - 0.12 + legStrideL * 0.6, 0.04, pz + legStrideL * 1.5],
+                    [px + 0.12 + legStrideR * 0.6, 0.04, pz + legStrideR * 1.5],
+                ];
+            }
+            
+            // ── Standing pose (weight shift + breathing) ──
+            const ws = Math.sin(t * 0.6 + personIdx) * 0.012;
+            const headTurn = Math.sin(t * 0.3 + personIdx) * 0.015;
+            const headTilt = Math.cos(t * 0.25 + personIdx) * 0.008;
+            const sway = Math.sin(t * 0.8 + personIdx) * 0.005 + ws;
+            const lkb = Math.max(0, Math.sin(t * 0.6 + personIdx)) * 0.015;
+            const rkb = Math.max(0, -Math.sin(t * 0.6 + personIdx)) * 0.015;
+            
             return [
-                { x: 0, y: 1.7, z: 0 },       // 0: nose
-                { x: -0.08, y: 1.72, z: 0 },  // 1: left eye
-                { x: 0.08, y: 1.72, z: 0 },   // 2: right eye
-                { x: -0.12, y: 1.7, z: 0 },   // 3: left ear
-                { x: 0.12, y: 1.7, z: 0 },    // 4: right ear
-                { x: -0.25, y: 1.5, z: 0 },   // 5: left shoulder
-                { x: 0.25, y: 1.5, z: 0 },    // 6: right shoulder
-                { x: -0.5, y: 1.3, z: 0 },    // 7: left elbow
-                { x: 0.5, y: 1.3, z: 0 },     // 8: right elbow
-                { x: -0.75, y: 1.1, z: 0 },   // 9: left wrist
-                { x: 0.75, y: 1.1, z: 0 },    // 10: right wrist
-                { x: -0.15, y: 1.0, z: 0 },   // 11: left hip
-                { x: 0.15, y: 1.0, z: 0 },    // 12: right hip
-                { x: -0.18, y: 0.55, z: 0 },  // 13: left knee
-                { x: 0.18, y: 0.55, z: 0 },   // 14: right knee
-                { x: -0.2, y: 0.1, z: 0 },    // 15: left ankle
-                { x: 0.2, y: 0.1, z: 0 },     // 16: right ankle
-                { x: -0.85, y: 1.12, z: -0.05 }, // 17: left thumb
-                { x: -0.9, y: 1.08, z: 0 },    // 18: left index
-                { x: -0.85, y: 1.06, z: 0.05 }, // 19: left pinky
-                { x: 0.85, y: 1.12, z: -0.05 }, // 20: right thumb
-                { x: 0.9, y: 1.08, z: 0 },     // 21: right index
-                { x: 0.85, y: 1.06, z: 0.05 },  // 22: right pinky
-                { x: -0.25, y: 0.08, z: 0.15 }, // 23: left foot
-                { x: 0.25, y: 0.08, z: 0.15 },  // 24: right foot
-                { x: 0, y: 1.58, z: 0 }         // 25: neck
+                [px + sway + headTurn, 1.72 + bp + headTilt, pz],
+                [px - 0.03 + sway + headTurn, 1.74 + bp + headTilt, pz - 0.02],
+                [px + 0.03 + sway + headTurn, 1.74 + bp + headTilt, pz - 0.02],
+                [px - 0.07 + headTurn * 0.5, 1.72 + bp, pz],
+                [px + 0.07 + headTurn * 0.5, 1.72 + bp, pz],
+                [px - 0.22 + ws * 0.3, 1.48 + bp, pz],
+                [px + 0.22 + ws * 0.3, 1.48 + bp, pz],
+                [px - 0.24 + ws * 0.2, 1.18 + bp, pz + 0.02],
+                [px + 0.24 + ws * 0.2, 1.18 + bp, pz - 0.02],
+                [px - 0.22 + ws * 0.15, 0.92 + bp, pz + 0.05],
+                [px + 0.22 + ws * 0.15, 0.92 + bp, pz - 0.05],
+                [px - 0.11 + ws * 0.5, 0.98 + bp, pz],
+                [px + 0.11 + ws * 0.5, 0.98 + bp, pz],
+                [px - 0.12 + ws * 0.3, 0.52 + lkb, pz],
+                [px + 0.12 + ws * 0.3, 0.52 + rkb, pz],
+                [px - 0.12 + ws * 0.4, 0.04, pz],
+                [px + 0.12 + ws * 0.4, 0.04, pz],
             ];
         }
-        
-        function updateSkeletonPose(pose) {
-            if (!skeletonGroup) return;
-            
-            const joints = skeletonGroup.userData.joints;
-            const bones = skeletonGroup.userData.bones;
+
+        // ── Smooth interpolation helper ──
+        function lerpPose(target, current, factor) {
+            if (!current) return target.map(k => [...k]);
+            return target.map((kt, i) => {
+                const ci = current[i] || kt;
+                return [
+                    ci[0] + (kt[0] - ci[0]) * factor,
+                    ci[1] + (kt[1] - ci[1]) * factor,
+                    ci[2] + (kt[2] - ci[2]) * factor
+                ];
+            });
+        }
+
+        function updateFigureFromPose(group, pose17) {
+            if (!pose17) return;
+            const { joints, bones, segments } = group.userData;
             
             // Update joint positions
-            pose.forEach((point, i) => {
-                if (joints[i]) {
-                    joints[i].position.set(point.x, point.y, point.z);
-                }
+            pose17.forEach((kp, i) => {
+                if (joints[i]) joints[i].position.set(kp[0], kp[1], kp[2]);
             });
             
-            // Update bones (connect joints)
+            // Update bones
             bones.forEach(bone => {
-                const jointA = joints[bone.userData.jointA];
-                const jointB = joints[bone.userData.jointB];
-                
-                if (jointA && jointB) {
-                    // Position midpoint
-                    const mid = new THREE.Vector3().addVectors(jointA.position, jointB.position).multiplyScalar(0.5);
-                    bone.position.copy(mid);
-                    
-                    // Orient towards second joint
-                    const direction = new THREE.Vector3().subVectors(jointB.position, jointA.position);
-                    const length = direction.length();
-                    
-                    bone.scale.y = length;
-                    bone.lookAt(jointB.position);
-                    bone.rotateX(Math.PI / 2);
+                const a = bone.userData.jointA, b = bone.userData.jointB;
+                if (!joints[a] || !joints[b]) return;
+                _vFrom.copy(joints[a].position); _vTo.copy(joints[b].position);
+                const mid = _vFrom.clone().add(_vTo).multiplyScalar(0.5);
+                bone.position.copy(mid);
+                bone.scale.y = _vFrom.distanceTo(_vTo);
+                bone.lookAt(_vTo);
+                bone.rotateX(Math.PI / 2);
+            });
+            
+            // Update body segments
+            segments.forEach(seg => {
+                const a = seg.userData.jointA, b = seg.userData.jointB;
+                if (!joints[a] || !joints[b]) return;
+                const pa = joints[a].position, pb = joints[b].position;
+                if (seg.userData.isHead) {
+                    seg.position.copy(pa);
+                } else {
+                    const mid = pa.clone().add(pb).multiplyScalar(0.5);
+                    seg.position.copy(mid);
+                    seg.scale.y = pa.distanceTo(pb);
+                    seg.lookAt(pb);
+                    seg.rotateX(Math.PI / 2);
                 }
             });
         }
-        
-        function animatePose(t) {
-            const basePose = getDefaultPose();
-            
-            // Add breathing animation
-            const breathing = Math.sin(t * 2) * 0.02;
-            const chest = Math.sin(t * 2) * 0.01;
-            
-            basePose[25].y += breathing; // neck
-            basePose[5].z += chest; // left shoulder
-            basePose[6].z += chest; // right shoulder
-            
-            // Add subtle arm swing
-            const armSwing = Math.sin(t * 1.5) * 0.05;
-            basePose[9].z += armSwing;
-            basePose[10].z -= armSwing;
-            
-            // Add slight body sway
-            const sway = Math.sin(t * 0.8) * 0.03;
-            basePose[0].x += sway;
-            basePose[25].x += sway * 0.5;
-            
-            updateSkeletonPose(basePose);
+
+        function updateFigures(poses) {
+            for (let i = 0; i < figureGroups.length; i++) {
+                const group = figureGroups[i];
+                if (i < poses.length) {
+                    group.visible = true;
+                    if (!group.userData.smoothed) {
+                        // First frame: snap to target
+                        group.userData.smoothed = poses[i];
+                    } else {
+                        // Smooth lerp toward target
+                        group.userData.smoothed = lerpPose(poses[i], group.userData.smoothed, 0.12);
+                    }
+                    updateFigureFromPose(group, group.userData.smoothed);
+                } else {
+                    group.visible = false;
+                }
+            }
         }
-        
+
         function animate() {
             requestAnimationFrame(animate);
-            
             if (currentView !== 'skeleton' || !renderer) return;
             
             animationTime += 0.016;
-            animatePose(animationTime);
+            
+            // Build pose list: prefer server pose_keypoints, fall back to simulation
+            let poses = [];
+            if (latestData && latestData.pose_keypoints && latestData.pose_keypoints.length > 0) {
+                // Real data from server (already 17-point COCO [x,y,z,conf])
+                poses.push(latestData.pose_keypoints.map(k => [k[0], k[1], k[2]]));
+            } else {
+                // Simulated: generate poses from available data
+                const numPeople = (latestTriage && latestTriage.survivors && latestTriage.survivors.length > 0)
+                    ? Math.min(latestTriage.survivors.length, 3) : 1;
+                const motionScore = latestData?.classification?.motion_score 
+                    ?? (latestData?.classification?.motion_level === 'high' ? 0.8 :
+                        latestData?.classification?.motion_level === 'medium' ? 0.3 : 0.05);
+                const breathAmp = latestData?.vital_signs?.breathing_rate_bpm 
+                    ? Math.sin(animationTime * latestData.vital_signs.breathing_rate_bpm / 60 * Math.PI * 2) : 0;
+                for (let i = 0; i < numPeople; i++) {
+                    poses.push(generatePose17(i, animationTime * 60, motionScore, breathAmp));
+                }
+            }
+            
+            updateFigures(poses);
             if (controls) controls.update();
             renderer.render(scene, camera);
         }
-        
+
         function onWindowResize() {
             const container = document.getElementById('skeletonContainer');
             if (container && camera && renderer) {
-                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.aspect = container.clientWidth / Math.max(container.clientHeight, 1);
                 camera.updateProjectionMatrix();
                 renderer.setSize(container.clientWidth, container.clientHeight);
             }
@@ -1519,52 +1571,36 @@
         
         function toggleWireframe() {
             isWireframe = !isWireframe;
-            if (skeletonGroup) {
-                skeletonGroup.userData.joints.forEach(joint => {
-                    joint.material.wireframe = isWireframe;
-                });
-                skeletonGroup.userData.bones.forEach(bone => {
-                    bone.material.wireframe = isWireframe;
-                });
-            }
+            figureGroups.forEach(group => {
+                const ud = group.userData;
+                ud.joints?.forEach(j => { j.material.wireframe = isWireframe; });
+                ud.bones?.forEach(b => { b.material.wireframe = isWireframe; });
+                ud.segments?.forEach(s => { s.material.wireframe = isWireframe; });
+            });
         }
 
         // ==================== Data Rendering ====================
-        let lastRenderHash = '';
-        function getDataHash() {
-            const p = [];
-            if (latestTriage) {
-                const a = latestTriage.assessment;
-                p.push(a.total, a.immediate, a.delayed, a.minor, a.deceased, a.severity, a.rescuer_estimate);
-                latestTriage.survivors?.forEach(s => p.push(s.id, s.breathing_rate, s.heart_rate, s.triage_color, s.is_deteriorating));
-                latestTriage.alerts?.forEach(a => p.push(a.survivor_id, a.message, a.priority));
-            }
-            latestData?.wasm_alerts?.forEach(a => p.push(a.module, a.event_name, a.value));
-            return p.join('|');
-        }
+        let lastRenderStamp = 0;
+        const MIN_RENDER_MS = 150; // throttle heavy DOM rebuilds to ~6fps
 
         function renderFromServer() {
             if (!latestTriage) return;
 
-            // Skip re-render if data unchanged (prevents flickering)
-            const hash = getDataHash();
-            const changed = hash !== lastRenderHash;
-            lastRenderHash = hash;
-
             const assessment = latestTriage.assessment;
+            const now = performance.now();
             
-            // Update stats (always - lightweight textContent)
+            // Always update lightweight textContent (no flicker)
             document.getElementById('statTotal').textContent = assessment.total;
             document.getElementById('statRed').textContent = assessment.immediate;
             document.getElementById('statYellow').textContent = assessment.delayed;
             document.getElementById('statGreen').textContent = assessment.minor;
             document.getElementById('statBlack').textContent = assessment.deceased;
+            document.getElementById('severityText').textContent = '伤情等级: ' + assessment.severity;
+            document.getElementById('rescuerText').textContent = '建议救援人员: ' + assessment.rescuer_estimate + ' 人';
 
-            // Update assessment
-            document.getElementById('severityText').textContent = `伤情等级: ${assessment.severity}`;
-            document.getElementById('rescuerText').textContent = `建议救援人员: ${assessment.rescuer_estimate} 人`;
-
-            if (changed) {
+            // Throttle heavy DOM rebuilds (survivors list, alerts, wasm alerts)
+            if (now - lastRenderStamp >= MIN_RENDER_MS) {
+            lastRenderStamp = now;
             // Update survivors list
             const survivorsList = document.getElementById('survivorsList');
             if (!latestTriage.survivors || latestTriage.survivors.length === 0) {
@@ -1649,7 +1685,7 @@
                     </div>
                 `;
             }
-            } // end changed
+            } // end throttled
 
             // Update current vitals (lightweight - always)
             if (latestData && latestData.vital_signs) {
@@ -1706,19 +1742,6 @@
         }
 
         // ==================== Controls ====================
-        function toggleSkeleton() {
-            skeletonEnabled = !skeletonEnabled;
-            const btn = document.getElementById('skelBtn');
-            btn.textContent = skeletonEnabled ? '已开启' : '关闭';
-            btn.classList.toggle('active', skeletonEnabled);
-            
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    cmd: skeletonEnabled ? 'enable_skeleton' : 'disable_skeleton'
-                }));
-            }
-        }
-
         function toggleHeatmap() {
             showHeatmap = !showHeatmap;
             if (currentView === 'map') {
